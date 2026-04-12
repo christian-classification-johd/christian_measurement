@@ -1,0 +1,11 @@
+score,main_model,main_model_pretty,date_function,has_creator,main_waic,main_dic,y_sd,score_label
+score_nb_logit,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,6625.121535353055,6598.911628057077,27.10433416234271,NB Logit
+score_ridge_logit,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,2665.5320316678917,2670.98206510652,2.0103391574157827,Ridge Logit
+score_svm_margin,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,2052.070699593719,2058.44608569069,1.5235728749299353,SVM Margin
+score_svm_logit,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3728.610290590669,3732.2616537649137,4.452305590492067,SVM Logit
+score_xgb_margin,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3724.1230026891535,3724.6030283558975,4.2462726622757705,XGBoost Margin
+score_xgb_logit,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3309.536168020977,3310.8990097062015,3.257814569466618,XGBoost Logit
+score_lgb_margin,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3100.048191219903,3097.748444573202,2.851751278667045,LightGBM Margin
+score_lgb_logit,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3148.942689329403,3146.5576025105456,2.942219811873306,LightGBM Logit
+score_bert_logit,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3699.808468495329,3684.0654539698025,3.5030130851659,Bert Logit
+score_bert_margin,date_rw2_creator_source,Source + RW2 date + creator,rw2,TRUE,3288.2836888941406,3283.6652778924195,2.9997073453266205,Bert Margin

@@ -1,0 +1,6 @@
+corpus.csv
+text_classification_nb_cache/
+*.rdb
+
+# Mac OS
+**/.DS_Store

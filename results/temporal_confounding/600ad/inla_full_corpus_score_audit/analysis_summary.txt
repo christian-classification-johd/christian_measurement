@@ -1,0 +1,12 @@
+Full-corpus score modeling summary
+
+Bert Logit: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=325.87 [large]; creator gain=133.71 [large]
+Bert Margin: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=415.41 [large]; creator gain=191.72 [large]
+LightGBM Logit: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=403.92 [large]; creator gain=349.34 [large]
+LightGBM Margin: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=404.18 [large]; creator gain=349.25 [large]
+NB Logit: flipped=FALSE; best=Source + creator; main=Source + RW2 date + creator; date gain=320.7 [large]; creator gain=420.01 [large]
+Ridge Logit: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=338.96 [large]; creator gain=302.74 [large]
+SVM Logit: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=462.44 [large]; creator gain=357.88 [large]
+SVM Margin: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=468.66 [large]; creator gain=355.31 [large]
+XGBoost Logit: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=400.35 [large]; creator gain=350.74 [large]
+XGBoost Margin: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=398.42 [large]; creator gain=351.46 [large]

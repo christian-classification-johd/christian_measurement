@@ -1,0 +1,6 @@
+model,min_docfreq,lambda_1se,lambda_min,cost,candidate_id,eta,max_depth,min_child_weight,subsample,colsample_bytree,log_loss,auc,best_nrounds,learning_rate,num_leaves,min_data_in_leaf,feature_fraction,bagging_fraction
+naive_bayes,3,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+ridge,3,22.977888423238102,3.139809770622591,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+svm_platt,3,NA,NA,0.25,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+xgboost,3,NA,NA,NA,3,0.03,6,1,0.8,0.8,0.33736556445009064,0.9318614389036919,251,NA,NA,NA,NA,NA
+lightgbm,3,NA,NA,NA,6,NA,NA,NA,NA,NA,0.27378498121552575,0.9510848877046055,242,0.05,15,20,0.8,0.8

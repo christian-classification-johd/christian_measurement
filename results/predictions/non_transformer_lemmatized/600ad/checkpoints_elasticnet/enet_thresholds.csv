@@ -1,0 +1,2 @@
+model,method,alpha,lambda_1se,lambda_min,threshold_youden,threshold_f1,threshold_scope
+ridge,elastic_net,0.2,0.0987210075703853,0.017048953051111912,0.11755900920419149,0.18943159784121766,full_labeled_cross_fitted_calibrated

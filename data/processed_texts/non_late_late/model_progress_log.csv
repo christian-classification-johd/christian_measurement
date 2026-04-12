@@ -1,0 +1,639 @@
+time,step,detail
+2026-03-29 01:51:03,load_data,reading corpus and labels
+2026-03-29 01:51:04,outer_fold_start,fold 1 of 5
+2026-03-29 01:51:17,fit_nb,outer fold 1
+2026-03-29 01:51:17,fit_ridge,outer fold 1
+2026-03-29 01:51:21,tune_svm,outer fold 1
+2026-03-29 01:51:21,svm_inner_fold,outer 1 cost 0.25 fold 1 of 5
+2026-03-29 01:51:21,svm_inner_fold,outer 1 cost 0.25 fold 2 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 0.25 fold 3 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 0.25 fold 4 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 0.25 fold 5 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 1 fold 1 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 1 fold 2 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 1 fold 3 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 1 fold 4 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 1 fold 5 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 4 fold 1 of 5
+2026-03-29 01:51:22,svm_inner_fold,outer 1 cost 4 fold 2 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 4 fold 3 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 4 fold 4 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 4 fold 5 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 16 fold 1 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 16 fold 2 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 16 fold 3 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 16 fold 4 of 5
+2026-03-29 01:51:23,svm_inner_fold,outer 1 cost 16 fold 5 of 5
+2026-03-29 01:51:23,tune_xgb,outer fold 1
+2026-03-29 01:51:23,xgb_inner_fold,outer 1 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:51:26,xgb_inner_fold,outer 1 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:51:29,xgb_inner_fold,outer 1 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:51:33,xgb_inner_fold,outer 1 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:51:38,xgb_inner_fold,outer 1 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:51:42,xgb_inner_fold,outer 1 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:51:44,xgb_inner_fold,outer 1 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:51:46,xgb_inner_fold,outer 1 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:51:50,xgb_inner_fold,outer 1 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:51:55,xgb_inner_fold,outer 1 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:51:58,xgb_inner_fold,outer 1 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:52:01,xgb_inner_fold,outer 1 candidate 3 of 8 fold 2 of 5
+2026-03-29 01:52:05,xgb_inner_fold,outer 1 candidate 3 of 8 fold 3 of 5
+2026-03-29 01:52:11,xgb_inner_fold,outer 1 candidate 3 of 8 fold 4 of 5
+2026-03-29 01:52:20,xgb_inner_fold,outer 1 candidate 3 of 8 fold 5 of 5
+2026-03-29 01:52:25,xgb_inner_fold,outer 1 candidate 4 of 8 fold 1 of 5
+2026-03-29 01:52:27,xgb_inner_fold,outer 1 candidate 4 of 8 fold 2 of 5
+2026-03-29 01:52:30,xgb_inner_fold,outer 1 candidate 4 of 8 fold 3 of 5
+2026-03-29 01:52:34,xgb_inner_fold,outer 1 candidate 4 of 8 fold 4 of 5
+2026-03-29 01:52:37,xgb_inner_fold,outer 1 candidate 4 of 8 fold 5 of 5
+2026-03-29 01:52:40,xgb_inner_fold,outer 1 candidate 5 of 8 fold 1 of 5
+2026-03-29 01:52:42,xgb_inner_fold,outer 1 candidate 5 of 8 fold 2 of 5
+2026-03-29 01:52:44,xgb_inner_fold,outer 1 candidate 5 of 8 fold 3 of 5
+2026-03-29 01:52:47,xgb_inner_fold,outer 1 candidate 5 of 8 fold 4 of 5
+2026-03-29 01:52:51,xgb_inner_fold,outer 1 candidate 5 of 8 fold 5 of 5
+2026-03-29 01:52:54,xgb_inner_fold,outer 1 candidate 6 of 8 fold 1 of 5
+2026-03-29 01:52:55,xgb_inner_fold,outer 1 candidate 6 of 8 fold 2 of 5
+2026-03-29 01:52:57,xgb_inner_fold,outer 1 candidate 6 of 8 fold 3 of 5
+2026-03-29 01:53:02,xgb_inner_fold,outer 1 candidate 6 of 8 fold 4 of 5
+2026-03-29 01:53:05,xgb_inner_fold,outer 1 candidate 6 of 8 fold 5 of 5
+2026-03-29 01:53:07,xgb_inner_fold,outer 1 candidate 7 of 8 fold 1 of 5
+2026-03-29 01:53:10,xgb_inner_fold,outer 1 candidate 7 of 8 fold 2 of 5
+2026-03-29 01:53:13,xgb_inner_fold,outer 1 candidate 7 of 8 fold 3 of 5
+2026-03-29 01:53:16,xgb_inner_fold,outer 1 candidate 7 of 8 fold 4 of 5
+2026-03-29 01:53:20,xgb_inner_fold,outer 1 candidate 7 of 8 fold 5 of 5
+2026-03-29 01:53:24,xgb_inner_fold,outer 1 candidate 8 of 8 fold 1 of 5
+2026-03-29 01:53:26,xgb_inner_fold,outer 1 candidate 8 of 8 fold 2 of 5
+2026-03-29 01:53:27,xgb_inner_fold,outer 1 candidate 8 of 8 fold 3 of 5
+2026-03-29 01:53:30,xgb_inner_fold,outer 1 candidate 8 of 8 fold 4 of 5
+2026-03-29 01:53:35,xgb_inner_fold,outer 1 candidate 8 of 8 fold 5 of 5
+2026-03-29 01:53:40,tune_lgb,outer fold 1
+2026-03-29 01:53:40,lgb_inner_fold,outer 1 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:53:41,lgb_inner_fold,outer 1 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:53:41,lgb_inner_fold,outer 1 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:53:42,lgb_inner_fold,outer 1 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:53:43,lgb_inner_fold,outer 1 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:53:43,lgb_inner_fold,outer 1 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:53:44,lgb_inner_fold,outer 1 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:53:44,lgb_inner_fold,outer 1 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:53:45,lgb_inner_fold,outer 1 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:53:45,lgb_inner_fold,outer 1 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:53:45,lgb_inner_fold,outer 1 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:53:46,lgb_inner_fold,outer 1 candidate 3 of 8 fold 2 of 5
+2026-03-29 01:53:47,lgb_inner_fold,outer 1 candidate 3 of 8 fold 3 of 5
+2026-03-29 01:53:47,lgb_inner_fold,outer 1 candidate 3 of 8 fold 4 of 5
+2026-03-29 01:53:48,lgb_inner_fold,outer 1 candidate 3 of 8 fold 5 of 5
+2026-03-29 01:53:49,lgb_inner_fold,outer 1 candidate 4 of 8 fold 1 of 5
+2026-03-29 01:53:49,lgb_inner_fold,outer 1 candidate 4 of 8 fold 2 of 5
+2026-03-29 01:53:50,lgb_inner_fold,outer 1 candidate 4 of 8 fold 3 of 5
+2026-03-29 01:53:50,lgb_inner_fold,outer 1 candidate 4 of 8 fold 4 of 5
+2026-03-29 01:53:50,lgb_inner_fold,outer 1 candidate 4 of 8 fold 5 of 5
+2026-03-29 01:53:51,lgb_inner_fold,outer 1 candidate 5 of 8 fold 1 of 5
+2026-03-29 01:53:51,lgb_inner_fold,outer 1 candidate 5 of 8 fold 2 of 5
+2026-03-29 01:53:52,lgb_inner_fold,outer 1 candidate 5 of 8 fold 3 of 5
+2026-03-29 01:53:52,lgb_inner_fold,outer 1 candidate 5 of 8 fold 4 of 5
+2026-03-29 01:53:53,lgb_inner_fold,outer 1 candidate 5 of 8 fold 5 of 5
+2026-03-29 01:53:54,lgb_inner_fold,outer 1 candidate 6 of 8 fold 1 of 5
+2026-03-29 01:53:54,lgb_inner_fold,outer 1 candidate 6 of 8 fold 2 of 5
+2026-03-29 01:53:54,lgb_inner_fold,outer 1 candidate 6 of 8 fold 3 of 5
+2026-03-29 01:53:55,lgb_inner_fold,outer 1 candidate 6 of 8 fold 4 of 5
+2026-03-29 01:53:55,lgb_inner_fold,outer 1 candidate 6 of 8 fold 5 of 5
+2026-03-29 01:53:55,lgb_inner_fold,outer 1 candidate 7 of 8 fold 1 of 5
+2026-03-29 01:53:56,lgb_inner_fold,outer 1 candidate 7 of 8 fold 2 of 5
+2026-03-29 01:53:56,lgb_inner_fold,outer 1 candidate 7 of 8 fold 3 of 5
+2026-03-29 01:53:57,lgb_inner_fold,outer 1 candidate 7 of 8 fold 4 of 5
+2026-03-29 01:53:58,lgb_inner_fold,outer 1 candidate 7 of 8 fold 5 of 5
+2026-03-29 01:53:58,lgb_inner_fold,outer 1 candidate 8 of 8 fold 1 of 5
+2026-03-29 01:53:59,lgb_inner_fold,outer 1 candidate 8 of 8 fold 2 of 5
+2026-03-29 01:53:59,lgb_inner_fold,outer 1 candidate 8 of 8 fold 3 of 5
+2026-03-29 01:53:59,lgb_inner_fold,outer 1 candidate 8 of 8 fold 4 of 5
+2026-03-29 01:54:00,lgb_inner_fold,outer 1 candidate 8 of 8 fold 5 of 5
+2026-03-29 01:54:00,outer_fold_done,fold 1 of 5
+2026-03-29 01:54:00,outer_fold_start,fold 2 of 5
+2026-03-29 01:54:11,fit_nb,outer fold 2
+2026-03-29 01:54:11,fit_ridge,outer fold 2
+2026-03-29 01:54:15,tune_svm,outer fold 2
+2026-03-29 01:54:15,svm_inner_fold,outer 2 cost 0.25 fold 1 of 5
+2026-03-29 01:54:15,svm_inner_fold,outer 2 cost 0.25 fold 2 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 0.25 fold 3 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 0.25 fold 4 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 0.25 fold 5 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 1 fold 1 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 1 fold 2 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 1 fold 3 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 1 fold 4 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 1 fold 5 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 4 fold 1 of 5
+2026-03-29 01:54:16,svm_inner_fold,outer 2 cost 4 fold 2 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 4 fold 3 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 4 fold 4 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 4 fold 5 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 16 fold 1 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 16 fold 2 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 16 fold 3 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 16 fold 4 of 5
+2026-03-29 01:54:17,svm_inner_fold,outer 2 cost 16 fold 5 of 5
+2026-03-29 01:54:17,tune_xgb,outer fold 2
+2026-03-29 01:54:17,xgb_inner_fold,outer 2 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:54:21,xgb_inner_fold,outer 2 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:54:24,xgb_inner_fold,outer 2 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:54:26,xgb_inner_fold,outer 2 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:54:31,xgb_inner_fold,outer 2 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:54:34,xgb_inner_fold,outer 2 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:54:36,xgb_inner_fold,outer 2 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:54:39,xgb_inner_fold,outer 2 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:54:41,xgb_inner_fold,outer 2 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:54:44,xgb_inner_fold,outer 2 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:54:47,xgb_inner_fold,outer 2 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:54:51,xgb_inner_fold,outer 2 candidate 3 of 8 fold 2 of 5
+2026-03-29 01:54:55,xgb_inner_fold,outer 2 candidate 3 of 8 fold 3 of 5
+2026-03-29 01:54:59,xgb_inner_fold,outer 2 candidate 3 of 8 fold 4 of 5
+2026-03-29 01:55:06,xgb_inner_fold,outer 2 candidate 3 of 8 fold 5 of 5
+2026-03-29 01:55:09,xgb_inner_fold,outer 2 candidate 4 of 8 fold 1 of 5
+2026-03-29 01:55:11,xgb_inner_fold,outer 2 candidate 4 of 8 fold 2 of 5
+2026-03-29 01:55:16,xgb_inner_fold,outer 2 candidate 4 of 8 fold 3 of 5
+2026-03-29 01:55:19,xgb_inner_fold,outer 2 candidate 4 of 8 fold 4 of 5
+2026-03-29 01:55:23,xgb_inner_fold,outer 2 candidate 4 of 8 fold 5 of 5
+2026-03-29 01:55:26,xgb_inner_fold,outer 2 candidate 5 of 8 fold 1 of 5
+2026-03-29 01:55:28,xgb_inner_fold,outer 2 candidate 5 of 8 fold 2 of 5
+2026-03-29 01:55:30,xgb_inner_fold,outer 2 candidate 5 of 8 fold 3 of 5
+2026-03-29 01:55:32,xgb_inner_fold,outer 2 candidate 5 of 8 fold 4 of 5
+2026-03-29 01:55:36,xgb_inner_fold,outer 2 candidate 5 of 8 fold 5 of 5
+2026-03-29 01:55:38,xgb_inner_fold,outer 2 candidate 6 of 8 fold 1 of 5
+2026-03-29 01:55:39,xgb_inner_fold,outer 2 candidate 6 of 8 fold 2 of 5
+2026-03-29 01:55:42,xgb_inner_fold,outer 2 candidate 6 of 8 fold 3 of 5
+2026-03-29 01:55:44,xgb_inner_fold,outer 2 candidate 6 of 8 fold 4 of 5
+2026-03-29 01:55:47,xgb_inner_fold,outer 2 candidate 6 of 8 fold 5 of 5
+2026-03-29 01:55:49,xgb_inner_fold,outer 2 candidate 7 of 8 fold 1 of 5
+2026-03-29 01:55:52,xgb_inner_fold,outer 2 candidate 7 of 8 fold 2 of 5
+2026-03-29 01:55:55,xgb_inner_fold,outer 2 candidate 7 of 8 fold 3 of 5
+2026-03-29 01:55:58,xgb_inner_fold,outer 2 candidate 7 of 8 fold 4 of 5
+2026-03-29 01:56:03,xgb_inner_fold,outer 2 candidate 7 of 8 fold 5 of 5
+2026-03-29 01:56:06,xgb_inner_fold,outer 2 candidate 8 of 8 fold 1 of 5
+2026-03-29 01:56:07,xgb_inner_fold,outer 2 candidate 8 of 8 fold 2 of 5
+2026-03-29 01:56:09,xgb_inner_fold,outer 2 candidate 8 of 8 fold 3 of 5
+2026-03-29 01:56:12,xgb_inner_fold,outer 2 candidate 8 of 8 fold 4 of 5
+2026-03-29 01:56:15,xgb_inner_fold,outer 2 candidate 8 of 8 fold 5 of 5
+2026-03-29 01:56:19,tune_lgb,outer fold 2
+2026-03-29 01:56:19,lgb_inner_fold,outer 2 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:56:20,lgb_inner_fold,outer 2 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:56:20,lgb_inner_fold,outer 2 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:56:21,lgb_inner_fold,outer 2 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:56:22,lgb_inner_fold,outer 2 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:56:23,lgb_inner_fold,outer 2 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:56:23,lgb_inner_fold,outer 2 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:56:23,lgb_inner_fold,outer 2 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:56:24,lgb_inner_fold,outer 2 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:56:24,lgb_inner_fold,outer 2 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:56:25,lgb_inner_fold,outer 2 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:56:25,lgb_inner_fold,outer 2 candidate 3 of 8 fold 2 of 5
+2026-03-29 01:56:26,lgb_inner_fold,outer 2 candidate 3 of 8 fold 3 of 5
+2026-03-29 01:56:27,lgb_inner_fold,outer 2 candidate 3 of 8 fold 4 of 5
+2026-03-29 01:56:27,lgb_inner_fold,outer 2 candidate 3 of 8 fold 5 of 5
+2026-03-29 01:56:28,lgb_inner_fold,outer 2 candidate 4 of 8 fold 1 of 5
+2026-03-29 01:56:29,lgb_inner_fold,outer 2 candidate 4 of 8 fold 2 of 5
+2026-03-29 01:56:29,lgb_inner_fold,outer 2 candidate 4 of 8 fold 3 of 5
+2026-03-29 01:56:29,lgb_inner_fold,outer 2 candidate 4 of 8 fold 4 of 5
+2026-03-29 01:56:30,lgb_inner_fold,outer 2 candidate 4 of 8 fold 5 of 5
+2026-03-29 01:56:30,lgb_inner_fold,outer 2 candidate 5 of 8 fold 1 of 5
+2026-03-29 01:56:31,lgb_inner_fold,outer 2 candidate 5 of 8 fold 2 of 5
+2026-03-29 01:56:32,lgb_inner_fold,outer 2 candidate 5 of 8 fold 3 of 5
+2026-03-29 01:56:32,lgb_inner_fold,outer 2 candidate 5 of 8 fold 4 of 5
+2026-03-29 01:56:33,lgb_inner_fold,outer 2 candidate 5 of 8 fold 5 of 5
+2026-03-29 01:56:34,lgb_inner_fold,outer 2 candidate 6 of 8 fold 1 of 5
+2026-03-29 01:56:34,lgb_inner_fold,outer 2 candidate 6 of 8 fold 2 of 5
+2026-03-29 01:56:34,lgb_inner_fold,outer 2 candidate 6 of 8 fold 3 of 5
+2026-03-29 01:56:35,lgb_inner_fold,outer 2 candidate 6 of 8 fold 4 of 5
+2026-03-29 01:56:35,lgb_inner_fold,outer 2 candidate 6 of 8 fold 5 of 5
+2026-03-29 01:56:35,lgb_inner_fold,outer 2 candidate 7 of 8 fold 1 of 5
+2026-03-29 01:56:36,lgb_inner_fold,outer 2 candidate 7 of 8 fold 2 of 5
+2026-03-29 01:56:37,lgb_inner_fold,outer 2 candidate 7 of 8 fold 3 of 5
+2026-03-29 01:56:37,lgb_inner_fold,outer 2 candidate 7 of 8 fold 4 of 5
+2026-03-29 01:56:38,lgb_inner_fold,outer 2 candidate 7 of 8 fold 5 of 5
+2026-03-29 01:56:39,lgb_inner_fold,outer 2 candidate 8 of 8 fold 1 of 5
+2026-03-29 01:56:39,lgb_inner_fold,outer 2 candidate 8 of 8 fold 2 of 5
+2026-03-29 01:56:39,lgb_inner_fold,outer 2 candidate 8 of 8 fold 3 of 5
+2026-03-29 01:56:40,lgb_inner_fold,outer 2 candidate 8 of 8 fold 4 of 5
+2026-03-29 01:56:40,lgb_inner_fold,outer 2 candidate 8 of 8 fold 5 of 5
+2026-03-29 01:56:41,outer_fold_done,fold 2 of 5
+2026-03-29 01:56:41,outer_fold_start,fold 3 of 5
+2026-03-29 01:56:52,fit_nb,outer fold 3
+2026-03-29 01:56:52,fit_ridge,outer fold 3
+2026-03-29 01:56:55,tune_svm,outer fold 3
+2026-03-29 01:56:55,svm_inner_fold,outer 3 cost 0.25 fold 1 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 0.25 fold 2 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 0.25 fold 3 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 0.25 fold 4 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 0.25 fold 5 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 1 fold 1 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 1 fold 2 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 1 fold 3 of 5
+2026-03-29 01:56:56,svm_inner_fold,outer 3 cost 1 fold 4 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 1 fold 5 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 4 fold 1 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 4 fold 2 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 4 fold 3 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 4 fold 4 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 4 fold 5 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 16 fold 1 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 16 fold 2 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 16 fold 3 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 16 fold 4 of 5
+2026-03-29 01:56:57,svm_inner_fold,outer 3 cost 16 fold 5 of 5
+2026-03-29 01:56:58,tune_xgb,outer fold 3
+2026-03-29 01:56:58,xgb_inner_fold,outer 3 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:57:00,xgb_inner_fold,outer 3 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:57:01,xgb_inner_fold,outer 3 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:57:04,xgb_inner_fold,outer 3 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:57:06,xgb_inner_fold,outer 3 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:57:09,xgb_inner_fold,outer 3 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:57:11,xgb_inner_fold,outer 3 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:57:13,xgb_inner_fold,outer 3 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:57:15,xgb_inner_fold,outer 3 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:57:18,xgb_inner_fold,outer 3 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:57:20,xgb_inner_fold,outer 3 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:57:22,xgb_inner_fold,outer 3 candidate 3 of 8 fold 2 of 5
+2026-03-29 01:57:26,xgb_inner_fold,outer 3 candidate 3 of 8 fold 3 of 5
+2026-03-29 01:57:32,xgb_inner_fold,outer 3 candidate 3 of 8 fold 4 of 5
+2026-03-29 01:57:35,xgb_inner_fold,outer 3 candidate 3 of 8 fold 5 of 5
+2026-03-29 01:57:42,xgb_inner_fold,outer 3 candidate 4 of 8 fold 1 of 5
+2026-03-29 01:57:44,xgb_inner_fold,outer 3 candidate 4 of 8 fold 2 of 5
+2026-03-29 01:57:47,xgb_inner_fold,outer 3 candidate 4 of 8 fold 3 of 5
+2026-03-29 01:57:49,xgb_inner_fold,outer 3 candidate 4 of 8 fold 4 of 5
+2026-03-29 01:57:53,xgb_inner_fold,outer 3 candidate 4 of 8 fold 5 of 5
+2026-03-29 01:57:57,xgb_inner_fold,outer 3 candidate 5 of 8 fold 1 of 5
+2026-03-29 01:57:58,xgb_inner_fold,outer 3 candidate 5 of 8 fold 2 of 5
+2026-03-29 01:58:00,xgb_inner_fold,outer 3 candidate 5 of 8 fold 3 of 5
+2026-03-29 01:58:02,xgb_inner_fold,outer 3 candidate 5 of 8 fold 4 of 5
+2026-03-29 01:58:04,xgb_inner_fold,outer 3 candidate 5 of 8 fold 5 of 5
+2026-03-29 01:58:06,xgb_inner_fold,outer 3 candidate 6 of 8 fold 1 of 5
+2026-03-29 01:58:08,xgb_inner_fold,outer 3 candidate 6 of 8 fold 2 of 5
+2026-03-29 01:58:09,xgb_inner_fold,outer 3 candidate 6 of 8 fold 3 of 5
+2026-03-29 01:58:11,xgb_inner_fold,outer 3 candidate 6 of 8 fold 4 of 5
+2026-03-29 01:58:12,xgb_inner_fold,outer 3 candidate 6 of 8 fold 5 of 5
+2026-03-29 01:58:14,xgb_inner_fold,outer 3 candidate 7 of 8 fold 1 of 5
+2026-03-29 01:58:17,xgb_inner_fold,outer 3 candidate 7 of 8 fold 2 of 5
+2026-03-29 01:58:19,xgb_inner_fold,outer 3 candidate 7 of 8 fold 3 of 5
+2026-03-29 01:58:23,xgb_inner_fold,outer 3 candidate 7 of 8 fold 4 of 5
+2026-03-29 01:58:25,xgb_inner_fold,outer 3 candidate 7 of 8 fold 5 of 5
+2026-03-29 01:58:29,xgb_inner_fold,outer 3 candidate 8 of 8 fold 1 of 5
+2026-03-29 01:58:31,xgb_inner_fold,outer 3 candidate 8 of 8 fold 2 of 5
+2026-03-29 01:58:33,xgb_inner_fold,outer 3 candidate 8 of 8 fold 3 of 5
+2026-03-29 01:58:34,xgb_inner_fold,outer 3 candidate 8 of 8 fold 4 of 5
+2026-03-29 01:58:36,xgb_inner_fold,outer 3 candidate 8 of 8 fold 5 of 5
+2026-03-29 01:58:41,tune_lgb,outer fold 3
+2026-03-29 01:58:41,lgb_inner_fold,outer 3 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:58:41,lgb_inner_fold,outer 3 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:58:42,lgb_inner_fold,outer 3 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:58:43,lgb_inner_fold,outer 3 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:58:43,lgb_inner_fold,outer 3 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:58:44,lgb_inner_fold,outer 3 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:58:45,lgb_inner_fold,outer 3 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:58:45,lgb_inner_fold,outer 3 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:58:45,lgb_inner_fold,outer 3 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:58:46,lgb_inner_fold,outer 3 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:58:46,lgb_inner_fold,outer 3 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:58:47,lgb_inner_fold,outer 3 candidate 3 of 8 fold 2 of 5
+2026-03-29 01:58:48,lgb_inner_fold,outer 3 candidate 3 of 8 fold 3 of 5
+2026-03-29 01:58:48,lgb_inner_fold,outer 3 candidate 3 of 8 fold 4 of 5
+2026-03-29 01:58:49,lgb_inner_fold,outer 3 candidate 3 of 8 fold 5 of 5
+2026-03-29 01:58:50,lgb_inner_fold,outer 3 candidate 4 of 8 fold 1 of 5
+2026-03-29 01:58:50,lgb_inner_fold,outer 3 candidate 4 of 8 fold 2 of 5
+2026-03-29 01:58:51,lgb_inner_fold,outer 3 candidate 4 of 8 fold 3 of 5
+2026-03-29 01:58:51,lgb_inner_fold,outer 3 candidate 4 of 8 fold 4 of 5
+2026-03-29 01:58:52,lgb_inner_fold,outer 3 candidate 4 of 8 fold 5 of 5
+2026-03-29 01:58:52,lgb_inner_fold,outer 3 candidate 5 of 8 fold 1 of 5
+2026-03-29 01:58:53,lgb_inner_fold,outer 3 candidate 5 of 8 fold 2 of 5
+2026-03-29 01:58:53,lgb_inner_fold,outer 3 candidate 5 of 8 fold 3 of 5
+2026-03-29 01:58:54,lgb_inner_fold,outer 3 candidate 5 of 8 fold 4 of 5
+2026-03-29 01:58:54,lgb_inner_fold,outer 3 candidate 5 of 8 fold 5 of 5
+2026-03-29 01:58:55,lgb_inner_fold,outer 3 candidate 6 of 8 fold 1 of 5
+2026-03-29 01:58:55,lgb_inner_fold,outer 3 candidate 6 of 8 fold 2 of 5
+2026-03-29 01:58:56,lgb_inner_fold,outer 3 candidate 6 of 8 fold 3 of 5
+2026-03-29 01:58:56,lgb_inner_fold,outer 3 candidate 6 of 8 fold 4 of 5
+2026-03-29 01:58:57,lgb_inner_fold,outer 3 candidate 6 of 8 fold 5 of 5
+2026-03-29 01:58:57,lgb_inner_fold,outer 3 candidate 7 of 8 fold 1 of 5
+2026-03-29 01:58:58,lgb_inner_fold,outer 3 candidate 7 of 8 fold 2 of 5
+2026-03-29 01:58:58,lgb_inner_fold,outer 3 candidate 7 of 8 fold 3 of 5
+2026-03-29 01:58:59,lgb_inner_fold,outer 3 candidate 7 of 8 fold 4 of 5
+2026-03-29 01:58:59,lgb_inner_fold,outer 3 candidate 7 of 8 fold 5 of 5
+2026-03-29 01:59:00,lgb_inner_fold,outer 3 candidate 8 of 8 fold 1 of 5
+2026-03-29 01:59:00,lgb_inner_fold,outer 3 candidate 8 of 8 fold 2 of 5
+2026-03-29 01:59:01,lgb_inner_fold,outer 3 candidate 8 of 8 fold 3 of 5
+2026-03-29 01:59:01,lgb_inner_fold,outer 3 candidate 8 of 8 fold 4 of 5
+2026-03-29 01:59:01,lgb_inner_fold,outer 3 candidate 8 of 8 fold 5 of 5
+2026-03-29 01:59:02,outer_fold_done,fold 3 of 5
+2026-03-29 01:59:02,outer_fold_start,fold 4 of 5
+2026-03-29 01:59:13,fit_nb,outer fold 4
+2026-03-29 01:59:13,fit_ridge,outer fold 4
+2026-03-29 01:59:17,tune_svm,outer fold 4
+2026-03-29 01:59:17,svm_inner_fold,outer 4 cost 0.25 fold 1 of 5
+2026-03-29 01:59:17,svm_inner_fold,outer 4 cost 0.25 fold 2 of 5
+2026-03-29 01:59:17,svm_inner_fold,outer 4 cost 0.25 fold 3 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 0.25 fold 4 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 0.25 fold 5 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 1 fold 1 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 1 fold 2 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 1 fold 3 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 1 fold 4 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 1 fold 5 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 4 fold 1 of 5
+2026-03-29 01:59:18,svm_inner_fold,outer 4 cost 4 fold 2 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 4 fold 3 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 4 fold 4 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 4 fold 5 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 16 fold 1 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 16 fold 2 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 16 fold 3 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 16 fold 4 of 5
+2026-03-29 01:59:19,svm_inner_fold,outer 4 cost 16 fold 5 of 5
+2026-03-29 01:59:19,tune_xgb,outer fold 4
+2026-03-29 01:59:19,xgb_inner_fold,outer 4 candidate 1 of 8 fold 1 of 5
+2026-03-29 01:59:22,xgb_inner_fold,outer 4 candidate 1 of 8 fold 2 of 5
+2026-03-29 01:59:25,xgb_inner_fold,outer 4 candidate 1 of 8 fold 3 of 5
+2026-03-29 01:59:28,xgb_inner_fold,outer 4 candidate 1 of 8 fold 4 of 5
+2026-03-29 01:59:33,xgb_inner_fold,outer 4 candidate 1 of 8 fold 5 of 5
+2026-03-29 01:59:35,xgb_inner_fold,outer 4 candidate 2 of 8 fold 1 of 5
+2026-03-29 01:59:40,xgb_inner_fold,outer 4 candidate 2 of 8 fold 2 of 5
+2026-03-29 01:59:45,xgb_inner_fold,outer 4 candidate 2 of 8 fold 3 of 5
+2026-03-29 01:59:47,xgb_inner_fold,outer 4 candidate 2 of 8 fold 4 of 5
+2026-03-29 01:59:53,xgb_inner_fold,outer 4 candidate 2 of 8 fold 5 of 5
+2026-03-29 01:59:55,xgb_inner_fold,outer 4 candidate 3 of 8 fold 1 of 5
+2026-03-29 01:59:58,xgb_inner_fold,outer 4 candidate 3 of 8 fold 2 of 5
+2026-03-29 02:00:04,xgb_inner_fold,outer 4 candidate 3 of 8 fold 3 of 5
+2026-03-29 02:00:08,xgb_inner_fold,outer 4 candidate 3 of 8 fold 4 of 5
+2026-03-29 02:00:15,xgb_inner_fold,outer 4 candidate 3 of 8 fold 5 of 5
+2026-03-29 02:00:19,xgb_inner_fold,outer 4 candidate 4 of 8 fold 1 of 5
+2026-03-29 02:00:22,xgb_inner_fold,outer 4 candidate 4 of 8 fold 2 of 5
+2026-03-29 02:00:27,xgb_inner_fold,outer 4 candidate 4 of 8 fold 3 of 5
+2026-03-29 02:00:30,xgb_inner_fold,outer 4 candidate 4 of 8 fold 4 of 5
+2026-03-29 02:00:34,xgb_inner_fold,outer 4 candidate 4 of 8 fold 5 of 5
+2026-03-29 02:00:38,xgb_inner_fold,outer 4 candidate 5 of 8 fold 1 of 5
+2026-03-29 02:00:40,xgb_inner_fold,outer 4 candidate 5 of 8 fold 2 of 5
+2026-03-29 02:00:42,xgb_inner_fold,outer 4 candidate 5 of 8 fold 3 of 5
+2026-03-29 02:00:45,xgb_inner_fold,outer 4 candidate 5 of 8 fold 4 of 5
+2026-03-29 02:00:49,xgb_inner_fold,outer 4 candidate 5 of 8 fold 5 of 5
+2026-03-29 02:00:51,xgb_inner_fold,outer 4 candidate 6 of 8 fold 1 of 5
+2026-03-29 02:00:53,xgb_inner_fold,outer 4 candidate 6 of 8 fold 2 of 5
+2026-03-29 02:00:56,xgb_inner_fold,outer 4 candidate 6 of 8 fold 3 of 5
+2026-03-29 02:00:58,xgb_inner_fold,outer 4 candidate 6 of 8 fold 4 of 5
+2026-03-29 02:01:01,xgb_inner_fold,outer 4 candidate 6 of 8 fold 5 of 5
+2026-03-29 02:01:04,xgb_inner_fold,outer 4 candidate 7 of 8 fold 1 of 5
+2026-03-29 02:01:07,xgb_inner_fold,outer 4 candidate 7 of 8 fold 2 of 5
+2026-03-29 02:01:11,xgb_inner_fold,outer 4 candidate 7 of 8 fold 3 of 5
+2026-03-29 02:01:14,xgb_inner_fold,outer 4 candidate 7 of 8 fold 4 of 5
+2026-03-29 02:01:18,xgb_inner_fold,outer 4 candidate 7 of 8 fold 5 of 5
+2026-03-29 02:01:22,xgb_inner_fold,outer 4 candidate 8 of 8 fold 1 of 5
+2026-03-29 02:01:26,xgb_inner_fold,outer 4 candidate 8 of 8 fold 2 of 5
+2026-03-29 02:01:29,xgb_inner_fold,outer 4 candidate 8 of 8 fold 3 of 5
+2026-03-29 02:01:31,xgb_inner_fold,outer 4 candidate 8 of 8 fold 4 of 5
+2026-03-29 02:01:35,xgb_inner_fold,outer 4 candidate 8 of 8 fold 5 of 5
+2026-03-29 02:01:40,tune_lgb,outer fold 4
+2026-03-29 02:01:40,lgb_inner_fold,outer 4 candidate 1 of 8 fold 1 of 5
+2026-03-29 02:01:41,lgb_inner_fold,outer 4 candidate 1 of 8 fold 2 of 5
+2026-03-29 02:01:42,lgb_inner_fold,outer 4 candidate 1 of 8 fold 3 of 5
+2026-03-29 02:01:43,lgb_inner_fold,outer 4 candidate 1 of 8 fold 4 of 5
+2026-03-29 02:01:43,lgb_inner_fold,outer 4 candidate 1 of 8 fold 5 of 5
+2026-03-29 02:01:44,lgb_inner_fold,outer 4 candidate 2 of 8 fold 1 of 5
+2026-03-29 02:01:44,lgb_inner_fold,outer 4 candidate 2 of 8 fold 2 of 5
+2026-03-29 02:01:45,lgb_inner_fold,outer 4 candidate 2 of 8 fold 3 of 5
+2026-03-29 02:01:45,lgb_inner_fold,outer 4 candidate 2 of 8 fold 4 of 5
+2026-03-29 02:01:46,lgb_inner_fold,outer 4 candidate 2 of 8 fold 5 of 5
+2026-03-29 02:01:46,lgb_inner_fold,outer 4 candidate 3 of 8 fold 1 of 5
+2026-03-29 02:01:47,lgb_inner_fold,outer 4 candidate 3 of 8 fold 2 of 5
+2026-03-29 02:01:47,lgb_inner_fold,outer 4 candidate 3 of 8 fold 3 of 5
+2026-03-29 02:01:48,lgb_inner_fold,outer 4 candidate 3 of 8 fold 4 of 5
+2026-03-29 02:01:49,lgb_inner_fold,outer 4 candidate 3 of 8 fold 5 of 5
+2026-03-29 02:01:50,lgb_inner_fold,outer 4 candidate 4 of 8 fold 1 of 5
+2026-03-29 02:01:50,lgb_inner_fold,outer 4 candidate 4 of 8 fold 2 of 5
+2026-03-29 02:01:50,lgb_inner_fold,outer 4 candidate 4 of 8 fold 3 of 5
+2026-03-29 02:01:51,lgb_inner_fold,outer 4 candidate 4 of 8 fold 4 of 5
+2026-03-29 02:01:51,lgb_inner_fold,outer 4 candidate 4 of 8 fold 5 of 5
+2026-03-29 02:01:52,lgb_inner_fold,outer 4 candidate 5 of 8 fold 1 of 5
+2026-03-29 02:01:52,lgb_inner_fold,outer 4 candidate 5 of 8 fold 2 of 5
+2026-03-29 02:01:53,lgb_inner_fold,outer 4 candidate 5 of 8 fold 3 of 5
+2026-03-29 02:01:53,lgb_inner_fold,outer 4 candidate 5 of 8 fold 4 of 5
+2026-03-29 02:01:54,lgb_inner_fold,outer 4 candidate 5 of 8 fold 5 of 5
+2026-03-29 02:01:55,lgb_inner_fold,outer 4 candidate 6 of 8 fold 1 of 5
+2026-03-29 02:01:55,lgb_inner_fold,outer 4 candidate 6 of 8 fold 2 of 5
+2026-03-29 02:01:55,lgb_inner_fold,outer 4 candidate 6 of 8 fold 3 of 5
+2026-03-29 02:01:56,lgb_inner_fold,outer 4 candidate 6 of 8 fold 4 of 5
+2026-03-29 02:01:56,lgb_inner_fold,outer 4 candidate 6 of 8 fold 5 of 5
+2026-03-29 02:01:56,lgb_inner_fold,outer 4 candidate 7 of 8 fold 1 of 5
+2026-03-29 02:01:57,lgb_inner_fold,outer 4 candidate 7 of 8 fold 2 of 5
+2026-03-29 02:01:58,lgb_inner_fold,outer 4 candidate 7 of 8 fold 3 of 5
+2026-03-29 02:01:58,lgb_inner_fold,outer 4 candidate 7 of 8 fold 4 of 5
+2026-03-29 02:01:59,lgb_inner_fold,outer 4 candidate 7 of 8 fold 5 of 5
+2026-03-29 02:02:00,lgb_inner_fold,outer 4 candidate 8 of 8 fold 1 of 5
+2026-03-29 02:02:00,lgb_inner_fold,outer 4 candidate 8 of 8 fold 2 of 5
+2026-03-29 02:02:00,lgb_inner_fold,outer 4 candidate 8 of 8 fold 3 of 5
+2026-03-29 02:02:01,lgb_inner_fold,outer 4 candidate 8 of 8 fold 4 of 5
+2026-03-29 02:02:01,lgb_inner_fold,outer 4 candidate 8 of 8 fold 5 of 5
+2026-03-29 02:02:02,outer_fold_done,fold 4 of 5
+2026-03-29 02:02:02,outer_fold_start,fold 5 of 5
+2026-03-29 02:02:13,fit_nb,outer fold 5
+2026-03-29 02:02:13,fit_ridge,outer fold 5
+2026-03-29 02:02:16,tune_svm,outer fold 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 0.25 fold 1 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 0.25 fold 2 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 0.25 fold 3 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 0.25 fold 4 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 0.25 fold 5 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 1 fold 1 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 1 fold 2 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 1 fold 3 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 1 fold 4 of 5
+2026-03-29 02:02:17,svm_inner_fold,outer 5 cost 1 fold 5 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 4 fold 1 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 4 fold 2 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 4 fold 3 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 4 fold 4 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 4 fold 5 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 16 fold 1 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 16 fold 2 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 16 fold 3 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 16 fold 4 of 5
+2026-03-29 02:02:18,svm_inner_fold,outer 5 cost 16 fold 5 of 5
+2026-03-29 02:02:18,tune_xgb,outer fold 5
+2026-03-29 02:02:18,xgb_inner_fold,outer 5 candidate 1 of 8 fold 1 of 5
+2026-03-29 02:02:23,xgb_inner_fold,outer 5 candidate 1 of 8 fold 2 of 5
+2026-03-29 02:02:25,xgb_inner_fold,outer 5 candidate 1 of 8 fold 3 of 5
+2026-03-29 02:02:28,xgb_inner_fold,outer 5 candidate 1 of 8 fold 4 of 5
+2026-03-29 02:02:32,xgb_inner_fold,outer 5 candidate 1 of 8 fold 5 of 5
+2026-03-29 02:02:38,xgb_inner_fold,outer 5 candidate 2 of 8 fold 1 of 5
+2026-03-29 02:02:40,xgb_inner_fold,outer 5 candidate 2 of 8 fold 2 of 5
+2026-03-29 02:02:41,xgb_inner_fold,outer 5 candidate 2 of 8 fold 3 of 5
+2026-03-29 02:02:44,xgb_inner_fold,outer 5 candidate 2 of 8 fold 4 of 5
+2026-03-29 02:02:46,xgb_inner_fold,outer 5 candidate 2 of 8 fold 5 of 5
+2026-03-29 02:02:50,xgb_inner_fold,outer 5 candidate 3 of 8 fold 1 of 5
+2026-03-29 02:02:54,xgb_inner_fold,outer 5 candidate 3 of 8 fold 2 of 5
+2026-03-29 02:02:59,xgb_inner_fold,outer 5 candidate 3 of 8 fold 3 of 5
+2026-03-29 02:03:04,xgb_inner_fold,outer 5 candidate 3 of 8 fold 4 of 5
+2026-03-29 02:03:08,xgb_inner_fold,outer 5 candidate 3 of 8 fold 5 of 5
+2026-03-29 02:03:16,xgb_inner_fold,outer 5 candidate 4 of 8 fold 1 of 5
+2026-03-29 02:03:20,xgb_inner_fold,outer 5 candidate 4 of 8 fold 2 of 5
+2026-03-29 02:03:22,xgb_inner_fold,outer 5 candidate 4 of 8 fold 3 of 5
+2026-03-29 02:03:26,xgb_inner_fold,outer 5 candidate 4 of 8 fold 4 of 5
+2026-03-29 02:03:29,xgb_inner_fold,outer 5 candidate 4 of 8 fold 5 of 5
+2026-03-29 02:03:36,xgb_inner_fold,outer 5 candidate 5 of 8 fold 1 of 5
+2026-03-29 02:03:39,xgb_inner_fold,outer 5 candidate 5 of 8 fold 2 of 5
+2026-03-29 02:03:41,xgb_inner_fold,outer 5 candidate 5 of 8 fold 3 of 5
+2026-03-29 02:03:43,xgb_inner_fold,outer 5 candidate 5 of 8 fold 4 of 5
+2026-03-29 02:03:45,xgb_inner_fold,outer 5 candidate 5 of 8 fold 5 of 5
+2026-03-29 02:03:49,xgb_inner_fold,outer 5 candidate 6 of 8 fold 1 of 5
+2026-03-29 02:03:52,xgb_inner_fold,outer 5 candidate 6 of 8 fold 2 of 5
+2026-03-29 02:03:54,xgb_inner_fold,outer 5 candidate 6 of 8 fold 3 of 5
+2026-03-29 02:03:56,xgb_inner_fold,outer 5 candidate 6 of 8 fold 4 of 5
+2026-03-29 02:03:58,xgb_inner_fold,outer 5 candidate 6 of 8 fold 5 of 5
+2026-03-29 02:04:02,xgb_inner_fold,outer 5 candidate 7 of 8 fold 1 of 5
+2026-03-29 02:04:05,xgb_inner_fold,outer 5 candidate 7 of 8 fold 2 of 5
+2026-03-29 02:04:08,xgb_inner_fold,outer 5 candidate 7 of 8 fold 3 of 5
+2026-03-29 02:04:12,xgb_inner_fold,outer 5 candidate 7 of 8 fold 4 of 5
+2026-03-29 02:04:15,xgb_inner_fold,outer 5 candidate 7 of 8 fold 5 of 5
+2026-03-29 02:04:20,xgb_inner_fold,outer 5 candidate 8 of 8 fold 1 of 5
+2026-03-29 02:04:24,xgb_inner_fold,outer 5 candidate 8 of 8 fold 2 of 5
+2026-03-29 02:04:26,xgb_inner_fold,outer 5 candidate 8 of 8 fold 3 of 5
+2026-03-29 02:04:30,xgb_inner_fold,outer 5 candidate 8 of 8 fold 4 of 5
+2026-03-29 02:04:32,xgb_inner_fold,outer 5 candidate 8 of 8 fold 5 of 5
+2026-03-29 02:04:38,tune_lgb,outer fold 5
+2026-03-29 02:04:38,lgb_inner_fold,outer 5 candidate 1 of 8 fold 1 of 5
+2026-03-29 02:04:39,lgb_inner_fold,outer 5 candidate 1 of 8 fold 2 of 5
+2026-03-29 02:04:40,lgb_inner_fold,outer 5 candidate 1 of 8 fold 3 of 5
+2026-03-29 02:04:40,lgb_inner_fold,outer 5 candidate 1 of 8 fold 4 of 5
+2026-03-29 02:04:41,lgb_inner_fold,outer 5 candidate 1 of 8 fold 5 of 5
+2026-03-29 02:04:42,lgb_inner_fold,outer 5 candidate 2 of 8 fold 1 of 5
+2026-03-29 02:04:42,lgb_inner_fold,outer 5 candidate 2 of 8 fold 2 of 5
+2026-03-29 02:04:43,lgb_inner_fold,outer 5 candidate 2 of 8 fold 3 of 5
+2026-03-29 02:04:44,lgb_inner_fold,outer 5 candidate 2 of 8 fold 4 of 5
+2026-03-29 02:04:44,lgb_inner_fold,outer 5 candidate 2 of 8 fold 5 of 5
+2026-03-29 02:04:45,lgb_inner_fold,outer 5 candidate 3 of 8 fold 1 of 5
+2026-03-29 02:04:46,lgb_inner_fold,outer 5 candidate 3 of 8 fold 2 of 5
+2026-03-29 02:04:47,lgb_inner_fold,outer 5 candidate 3 of 8 fold 3 of 5
+2026-03-29 02:04:47,lgb_inner_fold,outer 5 candidate 3 of 8 fold 4 of 5
+2026-03-29 02:04:48,lgb_inner_fold,outer 5 candidate 3 of 8 fold 5 of 5
+2026-03-29 02:04:49,lgb_inner_fold,outer 5 candidate 4 of 8 fold 1 of 5
+2026-03-29 02:04:49,lgb_inner_fold,outer 5 candidate 4 of 8 fold 2 of 5
+2026-03-29 02:04:50,lgb_inner_fold,outer 5 candidate 4 of 8 fold 3 of 5
+2026-03-29 02:04:50,lgb_inner_fold,outer 5 candidate 4 of 8 fold 4 of 5
+2026-03-29 02:04:51,lgb_inner_fold,outer 5 candidate 4 of 8 fold 5 of 5
+2026-03-29 02:04:51,lgb_inner_fold,outer 5 candidate 5 of 8 fold 1 of 5
+2026-03-29 02:04:52,lgb_inner_fold,outer 5 candidate 5 of 8 fold 2 of 5
+2026-03-29 02:04:52,lgb_inner_fold,outer 5 candidate 5 of 8 fold 3 of 5
+2026-03-29 02:04:53,lgb_inner_fold,outer 5 candidate 5 of 8 fold 4 of 5
+2026-03-29 02:04:54,lgb_inner_fold,outer 5 candidate 5 of 8 fold 5 of 5
+2026-03-29 02:04:54,lgb_inner_fold,outer 5 candidate 6 of 8 fold 1 of 5
+2026-03-29 02:04:55,lgb_inner_fold,outer 5 candidate 6 of 8 fold 2 of 5
+2026-03-29 02:04:55,lgb_inner_fold,outer 5 candidate 6 of 8 fold 3 of 5
+2026-03-29 02:04:55,lgb_inner_fold,outer 5 candidate 6 of 8 fold 4 of 5
+2026-03-29 02:04:56,lgb_inner_fold,outer 5 candidate 6 of 8 fold 5 of 5
+2026-03-29 02:04:56,lgb_inner_fold,outer 5 candidate 7 of 8 fold 1 of 5
+2026-03-29 02:04:57,lgb_inner_fold,outer 5 candidate 7 of 8 fold 2 of 5
+2026-03-29 02:04:58,lgb_inner_fold,outer 5 candidate 7 of 8 fold 3 of 5
+2026-03-29 02:04:59,lgb_inner_fold,outer 5 candidate 7 of 8 fold 4 of 5
+2026-03-29 02:04:59,lgb_inner_fold,outer 5 candidate 7 of 8 fold 5 of 5
+2026-03-29 02:05:00,lgb_inner_fold,outer 5 candidate 8 of 8 fold 1 of 5
+2026-03-29 02:05:00,lgb_inner_fold,outer 5 candidate 8 of 8 fold 2 of 5
+2026-03-29 02:05:01,lgb_inner_fold,outer 5 candidate 8 of 8 fold 3 of 5
+2026-03-29 02:05:01,lgb_inner_fold,outer 5 candidate 8 of 8 fold 4 of 5
+2026-03-29 02:05:01,lgb_inner_fold,outer 5 candidate 8 of 8 fold 5 of 5
+2026-03-29 02:05:02,outer_fold_done,fold 5 of 5
+2026-03-29 02:05:02,fit_full_models,training on all labeled data
+2026-03-29 02:05:47,svm_inner_fold,full cost 0.25 fold 1 of 5
+2026-03-29 02:05:47,svm_inner_fold,full cost 0.25 fold 2 of 5
+2026-03-29 02:05:47,svm_inner_fold,full cost 0.25 fold 3 of 5
+2026-03-29 02:05:48,svm_inner_fold,full cost 0.25 fold 4 of 5
+2026-03-29 02:05:48,svm_inner_fold,full cost 0.25 fold 5 of 5
+2026-03-29 02:05:48,svm_inner_fold,full cost 1 fold 1 of 5
+2026-03-29 02:05:48,svm_inner_fold,full cost 1 fold 2 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 1 fold 3 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 1 fold 4 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 1 fold 5 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 4 fold 1 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 4 fold 2 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 4 fold 3 of 5
+2026-03-29 02:05:49,svm_inner_fold,full cost 4 fold 4 of 5
+2026-03-29 02:05:50,svm_inner_fold,full cost 4 fold 5 of 5
+2026-03-29 02:05:50,svm_inner_fold,full cost 16 fold 1 of 5
+2026-03-29 02:05:50,svm_inner_fold,full cost 16 fold 2 of 5
+2026-03-29 02:05:50,svm_inner_fold,full cost 16 fold 3 of 5
+2026-03-29 02:05:50,svm_inner_fold,full cost 16 fold 4 of 5
+2026-03-29 02:05:50,svm_inner_fold,full cost 16 fold 5 of 5
+2026-03-29 02:05:51,xgb_inner_fold,full candidate 1 of 8 fold 1 of 5
+2026-03-29 02:05:56,xgb_inner_fold,full candidate 1 of 8 fold 2 of 5
+2026-03-29 02:06:00,xgb_inner_fold,full candidate 1 of 8 fold 3 of 5
+2026-03-29 02:06:06,xgb_inner_fold,full candidate 1 of 8 fold 4 of 5
+2026-03-29 02:06:11,xgb_inner_fold,full candidate 1 of 8 fold 5 of 5
+2026-03-29 02:06:18,xgb_inner_fold,full candidate 2 of 8 fold 1 of 5
+2026-03-29 02:06:21,xgb_inner_fold,full candidate 2 of 8 fold 2 of 5
+2026-03-29 02:06:27,xgb_inner_fold,full candidate 2 of 8 fold 3 of 5
+2026-03-29 02:06:32,xgb_inner_fold,full candidate 2 of 8 fold 4 of 5
+2026-03-29 02:06:37,xgb_inner_fold,full candidate 2 of 8 fold 5 of 5
+2026-03-29 02:06:40,xgb_inner_fold,full candidate 3 of 8 fold 1 of 5
+2026-03-29 02:06:45,xgb_inner_fold,full candidate 3 of 8 fold 2 of 5
+2026-03-29 02:06:52,xgb_inner_fold,full candidate 3 of 8 fold 3 of 5
+2026-03-29 02:07:01,xgb_inner_fold,full candidate 3 of 8 fold 4 of 5
+2026-03-29 02:07:06,xgb_inner_fold,full candidate 3 of 8 fold 5 of 5
+2026-03-29 02:07:12,xgb_inner_fold,full candidate 4 of 8 fold 1 of 5
+2026-03-29 02:07:16,xgb_inner_fold,full candidate 4 of 8 fold 2 of 5
+2026-03-29 02:07:22,xgb_inner_fold,full candidate 4 of 8 fold 3 of 5
+2026-03-29 02:07:28,xgb_inner_fold,full candidate 4 of 8 fold 4 of 5
+2026-03-29 02:07:33,xgb_inner_fold,full candidate 4 of 8 fold 5 of 5
+2026-03-29 02:07:38,xgb_inner_fold,full candidate 5 of 8 fold 1 of 5
+2026-03-29 02:07:41,xgb_inner_fold,full candidate 5 of 8 fold 2 of 5
+2026-03-29 02:07:45,xgb_inner_fold,full candidate 5 of 8 fold 3 of 5
+2026-03-29 02:07:48,xgb_inner_fold,full candidate 5 of 8 fold 4 of 5
+2026-03-29 02:07:53,xgb_inner_fold,full candidate 5 of 8 fold 5 of 5
+2026-03-29 02:07:55,xgb_inner_fold,full candidate 6 of 8 fold 1 of 5
+2026-03-29 02:07:58,xgb_inner_fold,full candidate 6 of 8 fold 2 of 5
+2026-03-29 02:08:01,xgb_inner_fold,full candidate 6 of 8 fold 3 of 5
+2026-03-29 02:08:04,xgb_inner_fold,full candidate 6 of 8 fold 4 of 5
+2026-03-29 02:08:06,xgb_inner_fold,full candidate 6 of 8 fold 5 of 5
+2026-03-29 02:08:10,xgb_inner_fold,full candidate 7 of 8 fold 1 of 5
+2026-03-29 02:08:13,xgb_inner_fold,full candidate 7 of 8 fold 2 of 5
+2026-03-29 02:08:19,xgb_inner_fold,full candidate 7 of 8 fold 3 of 5
+2026-03-29 02:08:25,xgb_inner_fold,full candidate 7 of 8 fold 4 of 5
+2026-03-29 02:08:31,xgb_inner_fold,full candidate 7 of 8 fold 5 of 5
+2026-03-29 02:08:35,xgb_inner_fold,full candidate 8 of 8 fold 1 of 5
+2026-03-29 02:08:38,xgb_inner_fold,full candidate 8 of 8 fold 2 of 5
+2026-03-29 02:08:41,xgb_inner_fold,full candidate 8 of 8 fold 3 of 5
+2026-03-29 02:08:46,xgb_inner_fold,full candidate 8 of 8 fold 4 of 5
+2026-03-29 02:08:49,xgb_inner_fold,full candidate 8 of 8 fold 5 of 5
+2026-03-29 02:08:58,lgb_inner_fold,full candidate 1 of 8 fold 1 of 5
+2026-03-29 02:08:59,lgb_inner_fold,full candidate 1 of 8 fold 2 of 5
+2026-03-29 02:09:00,lgb_inner_fold,full candidate 1 of 8 fold 3 of 5
+2026-03-29 02:09:01,lgb_inner_fold,full candidate 1 of 8 fold 4 of 5
+2026-03-29 02:09:02,lgb_inner_fold,full candidate 1 of 8 fold 5 of 5
+2026-03-29 02:09:03,lgb_inner_fold,full candidate 2 of 8 fold 1 of 5
+2026-03-29 02:09:03,lgb_inner_fold,full candidate 2 of 8 fold 2 of 5
+2026-03-29 02:09:04,lgb_inner_fold,full candidate 2 of 8 fold 3 of 5
+2026-03-29 02:09:04,lgb_inner_fold,full candidate 2 of 8 fold 4 of 5
+2026-03-29 02:09:05,lgb_inner_fold,full candidate 2 of 8 fold 5 of 5
+2026-03-29 02:09:05,lgb_inner_fold,full candidate 3 of 8 fold 1 of 5
+2026-03-29 02:09:06,lgb_inner_fold,full candidate 3 of 8 fold 2 of 5
+2026-03-29 02:09:07,lgb_inner_fold,full candidate 3 of 8 fold 3 of 5
+2026-03-29 02:09:08,lgb_inner_fold,full candidate 3 of 8 fold 4 of 5
+2026-03-29 02:09:09,lgb_inner_fold,full candidate 3 of 8 fold 5 of 5
+2026-03-29 02:09:10,lgb_inner_fold,full candidate 4 of 8 fold 1 of 5
+2026-03-29 02:09:11,lgb_inner_fold,full candidate 4 of 8 fold 2 of 5
+2026-03-29 02:09:11,lgb_inner_fold,full candidate 4 of 8 fold 3 of 5
+2026-03-29 02:09:12,lgb_inner_fold,full candidate 4 of 8 fold 4 of 5
+2026-03-29 02:09:12,lgb_inner_fold,full candidate 4 of 8 fold 5 of 5
+2026-03-29 02:09:13,lgb_inner_fold,full candidate 5 of 8 fold 1 of 5
+2026-03-29 02:09:13,lgb_inner_fold,full candidate 5 of 8 fold 2 of 5
+2026-03-29 02:09:14,lgb_inner_fold,full candidate 5 of 8 fold 3 of 5
+2026-03-29 02:09:15,lgb_inner_fold,full candidate 5 of 8 fold 4 of 5
+2026-03-29 02:09:16,lgb_inner_fold,full candidate 5 of 8 fold 5 of 5
+2026-03-29 02:09:17,lgb_inner_fold,full candidate 6 of 8 fold 1 of 5
+2026-03-29 02:09:17,lgb_inner_fold,full candidate 6 of 8 fold 2 of 5
+2026-03-29 02:09:18,lgb_inner_fold,full candidate 6 of 8 fold 3 of 5
+2026-03-29 02:09:18,lgb_inner_fold,full candidate 6 of 8 fold 4 of 5
+2026-03-29 02:09:18,lgb_inner_fold,full candidate 6 of 8 fold 5 of 5
+2026-03-29 02:09:19,lgb_inner_fold,full candidate 7 of 8 fold 1 of 5
+2026-03-29 02:09:20,lgb_inner_fold,full candidate 7 of 8 fold 2 of 5
+2026-03-29 02:09:21,lgb_inner_fold,full candidate 7 of 8 fold 3 of 5
+2026-03-29 02:09:22,lgb_inner_fold,full candidate 7 of 8 fold 4 of 5
+2026-03-29 02:09:23,lgb_inner_fold,full candidate 7 of 8 fold 5 of 5
+2026-03-29 02:09:23,lgb_inner_fold,full candidate 8 of 8 fold 1 of 5
+2026-03-29 02:09:24,lgb_inner_fold,full candidate 8 of 8 fold 2 of 5
+2026-03-29 02:09:25,lgb_inner_fold,full candidate 8 of 8 fold 3 of 5
+2026-03-29 02:09:25,lgb_inner_fold,full candidate 8 of 8 fold 4 of 5
+2026-03-29 02:09:26,lgb_inner_fold,full candidate 8 of 8 fold 5 of 5
+2026-03-29 02:09:28,done,all outputs written

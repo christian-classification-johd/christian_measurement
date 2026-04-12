@@ -1,0 +1,9 @@
+quantity,value
+mean positive PPMI,0.525687923245793
+max PPMI,1.614978092809716
+mean abs partial correlation,0.03523240937024801
+number of nonzero conditional edges,9228
+top 5 singular values cumulative variance,0.7511197622546827
+top 10 singular values cumulative variance,0.8751298621150423
+mean pairwise mutual information,0.18203120117497018
+mean abs triple interaction information,0.1429094272630485

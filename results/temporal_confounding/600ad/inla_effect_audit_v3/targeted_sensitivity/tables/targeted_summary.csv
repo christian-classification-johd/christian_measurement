@@ -1,0 +1,3 @@
+analysis,best_model,best_waic,second_waic,delta_waic,date_only_waic
+within_christian,intercept_only,433.00551999410266,433.3105337507021,0.3050137565994646,NA
+window_150_350,label_date_rw2,335.7106057528697,NA,39.01788065013454,374.72848640300424

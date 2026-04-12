@@ -1,0 +1,1785 @@
+---
+title: "Model Evaluation & Figures"
+format: html
+---
+
+## Loading model predictions and hyperparameter settings 
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(ggplot2)
+  library(readr)
+  library(quanteda)
+  library(quanteda.textmodels)
+  library(Matrix)
+  library(glmnet)
+  library(LiblineaR)
+  library(xgboost)
+  library(lightgbm)
+  library(caret)
+  library(pROC)
+  library(viridisLite)
+  library(jsonlite)
+})
+
+options(stringsAsFactors = FALSE)
+
+data_path <- "../../data/processed_texts/600ad"
+
+corpus_file <- file.path(data_path, "corpus_600ad.csv")
+labels_file <- file.path(data_path, "corpus_600ad_labeled.csv")
+
+stopwords_file_1 <- "../../data/stopwords/stopwords_latin1.txt"
+stopwords_file_2 <- "../../data/stopwords/stopwords_latin2.txt"
+
+predictions_dir <- "../../results/predictions/non_transformer_lemmatized/600ad"
+
+model_outputs_file <- file.path(predictions_dir, "corpus_600ad_model_outputs_oof.csv")
+thresholds_file <- file.path(predictions_dir, "model_thresholds_oof.csv")
+hyperparams_full_file <- file.path(predictions_dir, "model_hyperparameters_full.csv")
+hyperparams_outer_file <- file.path(predictions_dir, "model_hyperparameters_outer.csv")
+
+bert_dir <- "../../results/predictions/bert_outputs_unlemmatized/600ad"
+```
+
+## Hyperparamater loading and model paramaters declarations
+
+```{r}
+set.seed(123)
+
+k_folds_outer <- 5L
+k_folds_inner <- 5L
+min_docfreq <- 3L
+
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
+}
+
+# ------------------------------------------------------------
+# Hyperparameter readers
+# ------------------------------------------------------------
+read_hyperparam_table <- function(path) {
+  if (!file.exists(path)) {
+    return(tibble(
+      model = c("naive_bayes", "ridge", "svm_platt", "xgboost", "lightgbm")
+    ))
+  }
+  readr::read_csv(path, show_col_types = FALSE) %>%
+    mutate(model = tolower(gsub("[ -]+", "_", model)))
+}
+
+model_hyperparameters_full <- read_hyperparam_table(hyperparams_full_file)
+model_hyperparameters_outer <- read_hyperparam_table(hyperparams_outer_file)
+
+hp_value <- function(tbl, model_key, col, default = NA_real_) {
+  if (!(col %in% names(tbl))) return(default)
+  x <- tbl %>%
+    filter(model == model_key) %>%
+    pull(all_of(col))
+  x <- x[!is.na(x)]
+  if (!length(x)) default else x[[1]]
+}
+
+ridge_fixed_lambda <- as.numeric(hp_value(model_hyperparameters_full, "ridge", "lambda_1se", 1))
+ridge_fixed_alpha  <- as.numeric(hp_value(model_hyperparameters_full, "ridge", "alpha", 0))
+svm_fixed_cost <- as.numeric(hp_value(model_hyperparameters_full, "svm_platt", "cost", 1))
+xgb_nrounds <- as.integer(round(hp_value(model_hyperparameters_full, "xgboost", "best_nrounds", 300L)))
+lgb_nrounds <- as.integer(round(hp_value(model_hyperparameters_full, "lightgbm", "best_nrounds", 300L)))
+
+xgb_base_params <- list(
+  booster = "gbtree",
+  objective = "binary:logistic",
+  eval_metric = "logloss",
+  tree_method = "hist",
+  eta = as.numeric(hp_value(model_hyperparameters_full, "xgboost", "eta", 0.05)),
+  max_depth = as.integer(round(hp_value(model_hyperparameters_full, "xgboost", "max_depth", 6L))),
+  min_child_weight = as.numeric(hp_value(model_hyperparameters_full, "xgboost", "min_child_weight", 1)),
+  subsample = as.numeric(hp_value(model_hyperparameters_full, "xgboost", "subsample", 0.8)),
+  colsample_bytree = as.numeric(hp_value(model_hyperparameters_full, "xgboost", "colsample_bytree", 0.8)),
+  gamma = as.numeric(hp_value(model_hyperparameters_full, "xgboost", "gamma", 0))
+)
+
+lgb_base_params <- list(
+  objective = "binary",
+  metric = "binary_logloss",
+  boosting = "gbdt",
+  learning_rate = as.numeric(hp_value(model_hyperparameters_full, "lightgbm", "learning_rate", 0.05)),
+  num_leaves = as.integer(round(hp_value(model_hyperparameters_full, "lightgbm", "num_leaves", 31L))),
+  min_data_in_leaf = as.integer(round(hp_value(model_hyperparameters_full, "lightgbm", "min_data_in_leaf", 10L))),
+  feature_fraction = as.numeric(hp_value(model_hyperparameters_full, "lightgbm", "feature_fraction", 0.8)),
+  bagging_fraction = as.numeric(hp_value(model_hyperparameters_full, "lightgbm", "bagging_fraction", 0.8)),
+  bagging_freq = 1L,
+  is_unbalance = TRUE,
+  first_metric_only = TRUE,
+  verbosity = -1
+)
+```
+
+```{r}
+#| label: utilities
+#| message: false
+
+# ------------------------------------------------------------
+# Small utilities
+# ------------------------------------------------------------
+safe_prob <- function(p, eps = 1e-15) pmin(pmax(as.numeric(p), eps), 1 - eps)
+safe_logit <- function(p, eps = 1e-15) qlogis(safe_prob(p, eps))
+
+balanced_weights <- function(y) {
+  y <- as.character(y)
+  n <- length(y)
+  n_pos <- sum(y == "christian")
+  n_neg <- sum(y == "non_christian")
+  ifelse(y == "christian", n / (2 * n_pos), n / (2 * n_neg))
+}
+
+pos_weight <- function(y) {
+  y <- as.character(y)
+  sum(y == "non_christian") / sum(y == "christian")
+}
+
+normalize_binary_label <- function(x) {
+  x <- tolower(x)
+  gsub("[ -]+", "_", x)
+}
+```
+
+```{r}
+#| label: read-corpus
+#| message: false
+
+stopifnot(file.exists(corpus_file))
+stopifnot(file.exists(labels_file))
+stopifnot(file.exists(stopwords_file_1))
+stopifnot(file.exists(stopwords_file_2))
+
+df_raw <- readr::read_csv(corpus_file, show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(!is.na(text) & text != "") %>%
+  mutate(row_id = row_number())
+
+labels <- readr::read_csv(labels_file, show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  transmute(
+    id,
+    manual_label = normalize_binary_label(label)
+  ) %>%
+  filter(manual_label %in% c("christian", "non_christian")) %>%
+  distinct(id, .keep_all = TRUE)
+
+df_labeled <- df_raw %>%
+  inner_join(labels, by = "id") %>%
+  arrange(row_id)
+
+stopifnot(nrow(df_raw) > 0)
+stopifnot(nrow(df_labeled) > 0)
+stopifnot(all(df_labeled$manual_label %in% c("christian", "non_christian")))
+```
+
+```{r}
+#| label: stopwords
+#| message: false
+
+custom_additions <- c(
+  "m", "c", "l", "d", "gt", "lt", "br", "href",
+  "fridericus", "heinricus", "conradus", "meus", "tuus"
+)
+
+stops_v1 <- scan(stopwords_file_1, what = "character", quiet = TRUE, encoding = "UTF-8")
+stops_v2 <- scan(stopwords_file_2, what = "character", comment.char = "#", quiet = TRUE, encoding = "UTF-8")
+
+latin_stops <- c(stops_v1, stops_v2, custom_additions)
+latin_stops <- latin_stops[latin_stops != "*"]
+latin_stops <- sort(unique(latin_stops))
+```
+
+```{r}
+#| label: feature-helpers
+#| message: false
+
+make_counts_dfm <- function(text_data, stop_list) {
+  toks <- tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) |>
+    tokens_remove(pattern = stop_list)
+  dfm(toks)
+}
+
+fit_tfidf <- function(text_data, stop_list, min_df = min_docfreq) {
+  counts <- make_counts_dfm(text_data, stop_list)
+  if (min_df > 1L) {
+    counts <- dfm_trim(counts, min_docfreq = min_df, docfreq_type = "count")
+  }
+  stopifnot(nfeat(counts) > 0)
+  list(
+    features = featnames(counts),
+    idf = log((ndoc(counts) + 1) / (docfreq(counts, scheme = "count") + 1)) + 1,
+    min_df = min_df
+  )
+}
+
+transform_tfidf <- function(text_data, tfidf_fit, stop_list) {
+  counts <- make_counts_dfm(text_data, stop_list)
+  counts <- dfm_match(counts, features = tfidf_fit$features)
+
+  x <- as(counts, "dgCMatrix")
+  if (length(x@x)) x@x <- 1 + log(x@x)
+
+  idf_vec <- tfidf_fit$idf[match(colnames(x), names(tfidf_fit$idf))]
+  idf_vec[is.na(idf_vec)] <- 0
+
+  x <- x %*% Matrix::Diagonal(x = idf_vec)
+  row_norms <- sqrt(Matrix::rowSums(x^2))
+  row_norms[row_norms == 0] <- 1
+  x <- x / row_norms
+  Matrix::drop0(x)
+}
+
+get_standard_dfm <- function(text_data, stop_list) {
+  make_counts_dfm(text_data, stop_list)
+}
+
+get_tfidf_dfm <- function(text_data, stop_list) {
+  tfidf_fit_tmp <- fit_tfidf(text_data, stop_list)
+  transform_tfidf(text_data, tfidf_fit_tmp, stop_list)
+}
+```
+
+```{r}
+#| label: model-helpers
+#| message: false
+
+nb_prob_christian <- function(pred_obj) {
+  if ("christian" %in% colnames(pred_obj)) {
+    safe_prob(pred_obj[, "christian"])
+  } else {
+    safe_prob(pred_obj[, ncol(pred_obj)])
+  }
+}
+
+fit_platt <- function(scores, y) {
+  z <- tibble(
+    score = as.numeric(scores),
+    y = as.integer(as.character(y) == "christian")
+  ) %>%
+    filter(is.finite(score))
+
+  if (nrow(z) < 10 || length(unique(z$score)) < 2 || length(unique(z$y)) < 2) {
+    return(NULL)
+  }
+
+  suppressWarnings(
+    tryCatch({
+      fit <- glm(y ~ score, data = z, family = binomial(), control = glm.control(maxit = 200))
+      beta <- coef(fit)[["score"]]
+      if (!is.finite(beta) || beta < 0 || abs(beta) > 50) return(NULL)
+      fit
+    }, error = function(e) NULL)
+  )
+}
+
+apply_platt <- function(platt, scores) {
+  scores <- as.numeric(scores)
+  if (is.null(platt)) {
+    z <- as.numeric(scale(scores))
+    z[!is.finite(z)] <- 0
+    return(safe_prob(plogis(z)))
+  }
+  safe_prob(predict(platt, newdata = data.frame(score = scores), type = "response"))
+}
+
+make_inner_folds <- function(y, k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  k_use <- suppressWarnings(min(as.integer(k), min(table(y))))
+  if (is.na(k_use) || k_use < 2) return(NULL)
+  set.seed(seed)
+  caret::createFolds(y, k = k_use, returnTrain = FALSE)
+}
+
+predict_nb_score <- function(fit, newx) {
+  safe_logit(nb_prob_christian(predict(fit, newdata = newx, type = "probability")))
+}
+
+cv_nb_scores <- function(x, y, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  folds <- make_inner_folds(y, k = inner_k, seed = seed)
+  if (is.null(folds)) {
+    fit <- textmodel_nb(x, y)
+    return(predict_nb_score(fit, x))
+  }
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit_j <- textmodel_nb(x[tr, ], y[tr])
+    scores[va] <- predict_nb_score(fit_j, x[va, ])
+  }
+  scores
+}
+
+fit_nb_with_platt <- function(x, y, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  scores <- cv_nb_scores(x, y, inner_k = inner_k, seed = seed)
+  platt <- fit_platt(scores, y)
+  fit <- textmodel_nb(x, y)
+  list(model = fit, platt = platt)
+}
+
+predict_nb_calibrated <- function(obj, x) {
+  score <- predict_nb_score(obj$model, x)
+  prob <- apply_platt(obj$platt, score)
+  list(prob = prob, score = score)
+}
+
+fit_ridge_fixed <- function(x, y, lambda, alpha = ridge_fixed_alpha) {
+  glmnet(
+    x = x,
+    y = as.integer(as.character(y) == "christian"),
+    family = "binomial",
+    alpha = alpha,
+    lambda = lambda,
+    standardize = TRUE,
+    maxit = 1e6
+  )
+}
+
+predict_ridge_score <- function(fit, newx) {
+  as.numeric(predict(fit, newx = newx, type = "link"))
+}
+
+predict_ridge_prob <- function(fit, newx) {
+  safe_prob(as.numeric(predict(fit, newx = newx, type = "response")))
+}
+
+cv_ridge_scores <- function(x, y, lambda, alpha = ridge_fixed_alpha, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  folds <- make_inner_folds(y, k = inner_k, seed = seed)
+  if (is.null(folds)) {
+    fit <- fit_ridge_fixed(x, y, lambda = lambda, alpha = alpha)
+    return(predict_ridge_score(fit, x))
+  }
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit_j <- fit_ridge_fixed(x[tr, , drop = FALSE], y[tr], lambda = lambda, alpha = alpha)
+    scores[va] <- predict_ridge_score(fit_j, x[va, , drop = FALSE])
+  }
+  scores
+}
+
+fit_ridge_with_platt <- function(x, y, lambda, alpha = ridge_fixed_alpha, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  fit <- fit_ridge_fixed(x, y, lambda = lambda, alpha = alpha)
+  list(model = fit, lambda = lambda, alpha = alpha)
+}
+
+predict_ridge_calibrated <- function(obj, x) {
+  score <- predict_ridge_score(obj$model, x)
+  prob  <- predict_ridge_prob(obj$model, x)
+  list(prob = prob, score = score)
+}
+
+fit_svm_fixed <- function(x, y, cost) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  fit <- LiblineaR(data = as.matrix(x), target = y, type = 7, cost = cost)
+  pred_tr <- predict(fit, as.matrix(x), decisionValues = TRUE)
+  raw <- as.numeric(pred_tr$decisionValues[, 1])
+  sign_fix <- if (mean(raw[y == "christian"]) >= mean(raw[y == "non_christian"])) 1 else -1
+  list(model = fit, sign = sign_fix, cost = cost)
+}
+
+predict_svm_score <- function(obj, x) {
+  pred <- predict(obj$model, as.matrix(x), decisionValues = TRUE)
+  obj$sign * as.numeric(pred$decisionValues[, 1])
+}
+
+cv_svm_scores <- function(x, y, cost, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  folds <- make_inner_folds(y, k = inner_k, seed = seed)
+  if (is.null(folds)) {
+    fit <- fit_svm_fixed(x, y, cost = cost)
+    return(predict_svm_score(fit, x))
+  }
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit_j <- fit_svm_fixed(x[tr, , drop = FALSE], y[tr], cost = cost)
+    scores[va] <- predict_svm_score(fit_j, x[va, , drop = FALSE])
+  }
+  scores
+}
+
+fit_svm_with_platt <- function(x, y, cost = svm_fixed_cost, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  scores <- cv_svm_scores(x, y, cost = cost, inner_k = inner_k, seed = seed)
+  platt <- fit_platt(scores, y)
+  fit <- fit_svm_fixed(x, y, cost = cost)
+  list(model = fit, platt = platt, cost = cost)
+}
+
+predict_svm_calibrated <- function(obj, x) {
+  score <- predict_svm_score(obj$model, x)
+  prob <- apply_platt(obj$platt, score)
+  list(prob = prob, score = score)
+}
+
+make_xgb_params <- function(scale_pos_weight = 1) {
+  modifyList(xgb_base_params, list(scale_pos_weight = scale_pos_weight))
+}
+
+fit_xgb_fixed <- function(x, y, params, nrounds, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+  xgb.train(
+    params = params,
+    data = xgb.DMatrix(x, label = as.integer(as.character(y) == "christian")),
+    nrounds = as.integer(nrounds),
+    verbose = 0
+  )
+}
+
+predict_xgb_score <- function(fit, x) {
+  as.numeric(predict(fit, xgb.DMatrix(x), outputmargin = TRUE))
+}
+
+cv_xgb_scores <- function(x, y, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  folds <- make_inner_folds(y, k = inner_k, seed = seed)
+  if (is.null(folds)) {
+    fit <- fit_xgb_fixed(
+      x, y,
+      params = make_xgb_params(scale_pos_weight = pos_weight(y)),
+      nrounds = xgb_nrounds,
+      seed = seed
+    )
+    return(predict_xgb_score(fit, x))
+  }
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit_j <- fit_xgb_fixed(
+      x[tr, , drop = FALSE], y[tr],
+      params = make_xgb_params(scale_pos_weight = pos_weight(y[tr])),
+      nrounds = xgb_nrounds,
+      seed = seed + j
+    )
+    scores[va] <- predict_xgb_score(fit_j, x[va, , drop = FALSE])
+  }
+  scores
+}
+
+fit_xgb_with_platt <- function(x, y, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  scores <- cv_xgb_scores(x, y, inner_k = inner_k, seed = seed)
+  platt <- fit_platt(scores, y)
+  fit <- fit_xgb_fixed(
+    x, y,
+    params = make_xgb_params(scale_pos_weight = pos_weight(y)),
+    nrounds = xgb_nrounds,
+    seed = seed + 999
+  )
+  list(model = fit, platt = platt, nrounds = xgb_nrounds, params = xgb_base_params)
+}
+
+predict_xgb_calibrated <- function(obj, x) {
+  score <- predict_xgb_score(obj$model, x)
+  prob <- apply_platt(obj$platt, score)
+  list(prob = prob, score = score)
+}
+
+make_lgb_dataset_params <- function() {
+  list(feature_pre_filter = FALSE)
+}
+
+make_lgb_params <- function(seed = 123) {
+  modifyList(
+    lgb_base_params,
+    list(
+      seed = seed,
+      feature_fraction_seed = seed,
+      bagging_seed = seed
+    )
+  )
+}
+
+fit_lgb_fixed <- function(x, y, params, nrounds) {
+  dtrain <- lgb.Dataset(
+    data = x,
+    label = as.integer(as.character(y) == "christian"),
+    params = make_lgb_dataset_params(),
+    free_raw_data = TRUE
+  )
+  lgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = as.integer(nrounds),
+    verbose = -1
+  )
+}
+
+predict_lgb_score <- function(model, x, num_iteration = NULL) {
+  args <- list(model, x)
+  if (!is.null(num_iteration)) args$num_iteration <- as.integer(num_iteration)
+  out <- tryCatch(
+    do.call(predict, c(args, list(type = "raw"))),
+    error = function(e) tryCatch(
+      do.call(predict, c(args, list(rawscore = TRUE))),
+      error = function(e2) {
+        p <- do.call(predict, args)
+        qlogis(safe_prob(p))
+      }
+    )
+  )
+  as.numeric(out)
+}
+
+cv_lgb_scores <- function(x, y, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  folds <- make_inner_folds(y, k = inner_k, seed = seed)
+  if (is.null(folds)) {
+    fit <- fit_lgb_fixed(
+      x, y,
+      params = make_lgb_params(seed = seed),
+      nrounds = lgb_nrounds
+    )
+    return(predict_lgb_score(fit, x, num_iteration = lgb_nrounds))
+  }
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit_j <- fit_lgb_fixed(
+      x[tr, , drop = FALSE], y[tr],
+      params = make_lgb_params(seed = seed + j),
+      nrounds = lgb_nrounds
+    )
+    scores[va] <- predict_lgb_score(fit_j, x[va, , drop = FALSE], num_iteration = lgb_nrounds)
+  }
+  scores
+}
+
+fit_lgb_with_platt <- function(x, y, inner_k = 5, seed = 1) {
+  y <- factor(as.character(y), levels = c("non_christian", "christian"))
+  scores <- cv_lgb_scores(x, y, inner_k = inner_k, seed = seed)
+  platt <- fit_platt(scores, y)
+  fit <- fit_lgb_fixed(
+    x, y,
+    params = make_lgb_params(seed = seed + 999),
+    nrounds = lgb_nrounds
+  )
+  list(model = fit, platt = platt, nrounds = lgb_nrounds, params = lgb_base_params)
+}
+
+predict_lgb_calibrated <- function(obj, x) {
+  score <- predict_lgb_score(obj$model, x, num_iteration = obj$nrounds)
+  prob <- apply_platt(obj$platt, score)
+  list(prob = prob, score = score)
+}
+```
+
+```{r}
+#| label: read-model-outputs
+#| message: false
+
+corpus_df <- df_raw %>%
+  left_join(labels, by = "id")
+
+stopifnot(file.exists(model_outputs_file))
+model_outputs <- readr::read_csv(model_outputs_file, show_col_types = FALSE)
+
+if ("id" %in% names(model_outputs)) {
+  model_outputs <- model_outputs %>% mutate(id = as.character(id))
+}
+
+join_keys <- intersect(c("id", "row_id"), intersect(names(corpus_df), names(model_outputs)))
+if ("id" %in% join_keys) {
+  join_keys <- "id"
+}
+stopifnot(length(join_keys) >= 1)
+
+message("Joining corpus_df to model_outputs on: ", paste(join_keys, collapse = ", "))
+
+corpus_df <- corpus_df %>%
+  left_join(model_outputs, by = join_keys, suffix = c("", ".model"))
+
+if ("row_id.model" %in% names(corpus_df)) {
+  corpus_df$row_id.model <- NULL
+}
+
+if ("manual_label.model" %in% names(corpus_df)) {
+  corpus_df$manual_label <- coalesce(corpus_df$manual_label, corpus_df$manual_label.model)
+  corpus_df$manual_label.model <- NULL
+}
+
+if ("prediction_source.model" %in% names(corpus_df) && !"prediction_source" %in% names(corpus_df)) {
+  names(corpus_df)[names(corpus_df) == "prediction_source.model"] <- "prediction_source"
+}
+
+model_suffix_cols <- grep("\\.model$", names(corpus_df), value = TRUE)
+if (length(model_suffix_cols)) {
+  for (col in model_suffix_cols) {
+    base_col <- sub("\\.model$", "", col)
+    if (base_col %in% names(corpus_df)) {
+      corpus_df[[base_col]] <- coalesce(corpus_df[[base_col]], corpus_df[[col]])
+    } else {
+      names(corpus_df)[names(corpus_df) == col] <- base_col
+    }
+  }
+  corpus_df <- corpus_df %>% select(-any_of(model_suffix_cols))
+}
+
+corpus_df <- corpus_df %>%
+  mutate(
+    manual_label = normalize_binary_label(manual_label),
+    prediction_source = if ("prediction_source" %in% names(.)) prediction_source else NA_character_
+  )
+
+
+n_labeled_with_probs <- corpus_df %>%
+  filter(
+    manual_label %in% c("christian", "non_christian"),
+    !is.na(prob_nb)
+  ) %>%
+  nrow()
+
+if (n_labeled_with_probs == 0) {
+  warning(
+    "Join produced 0 labeled rows with non-NA predictions. ",
+    "This typically means the join key ('", paste(join_keys, collapse = "', '"),
+    "') did not match between corpus_df and model_outputs. ",
+    "Verify that the id values in corpus_600ad.csv match those in ",
+    "corpus_600ad_model_outputs_oof.csv."
+  )
+}
+message(
+  "Labeled rows with predictions after join: ", n_labeled_with_probs,
+  " (", sum(corpus_df$manual_label %in% c("christian", "non_christian"), na.rm = TRUE),
+  " total labeled)"
+)
+```
+
+```{r}
+#| label: thresholds
+#| message: false
+
+if (file.exists(thresholds_file)) {
+  thresholds <- readr::read_csv(thresholds_file, show_col_types = FALSE)
+} else {
+  thresholds <- tibble(
+    model = c("naive_bayes", "ridge", "svm_platt", "xgboost", "lightgbm"),
+    threshold_youden = 0.5
+  )
+}
+
+required_output_cols <- c(
+  "prob_nb", "score_nb_logit", "label_nb_youden",
+  "prob_ridge", "score_ridge_logit", "label_ridge_youden",
+  "prob_svm", "score_svm_logit", "score_svm_margin", "label_svm_youden",
+  "prob_xgb", "score_xgb_logit", "label_xgb_youden",
+  "prob_lgb", "score_lgb_logit", "score_lgb_margin", "label_lgb_youden"
+)
+
+missing_output_cols <- setdiff(required_output_cols, names(corpus_df))
+if (length(missing_output_cols)) {
+  stop(
+    "The saved model output file is missing these columns: ",
+    paste(missing_output_cols, collapse = ", ")
+  )
+}
+
+stopifnot(
+  exists("corpus_df"),
+  exists("df_labeled"),
+  exists("latin_stops"),
+  exists("make_counts_dfm"),
+  exists("fit_tfidf"),
+  exists("transform_tfidf"),
+  exists("balanced_weights"),
+  exists("pos_weight"),
+  exists("nb_prob_christian"),
+  exists("fit_ridge_with_platt"),
+  exists("predict_ridge_calibrated"),
+  exists("fit_svm_with_platt"),
+  exists("predict_svm_calibrated"),
+  exists("xgb_base_params"),
+  exists("lgb_base_params"),
+  exists("safe_prob"),
+  exists("safe_logit")
+)
+```
+
+```{r}
+#| label: bert-inputs
+#| message: false
+
+bert_files <- list(
+  oof = file.path(bert_dir, "bert_oof_predictions.csv"),
+  full = file.path(bert_dir, "bert_full_predictions.csv"),
+  learning_curve = file.path(bert_dir, "bert_learning_curve.csv"),
+  metrics = file.path(bert_dir, "bert_metrics_oof.csv"),
+  config = file.path(bert_dir, "bert_run_config.json"),
+  features = NULL
+)
+
+bert_config <- if (!is.null(bert_files$config) && file.exists(bert_files$config)) {
+  tryCatch(jsonlite::fromJSON(bert_files$config), error = function(e) NULL)
+} else {
+  NULL
+}
+
+bert_metrics_external <- if (!is.null(bert_files$metrics) && file.exists(bert_files$metrics)) {
+  tryCatch(readr::read_csv(bert_files$metrics, show_col_types = FALSE), error = function(e) NULL)
+} else {
+  NULL
+}
+
+bert_model_name <- "Latin BERT"
+bert_model_id <- if (!is.null(bert_config) && !is.null(bert_config$model_name)) as.character(bert_config$model_name) else NA_character_
+
+bert_threshold_youden <- if (!is.null(bert_metrics_external) && "threshold_youden" %in% names(bert_metrics_external)) {
+  as.numeric(bert_metrics_external$threshold_youden[[1]])
+} else if (!is.null(bert_config) && !is.null(bert_config$threshold_youden)) {
+  as.numeric(bert_config$threshold_youden)
+} else {
+  0.5
+}
+
+bert_threshold_f1 <- if (!is.null(bert_metrics_external) && "threshold_f1" %in% names(bert_metrics_external)) {
+  as.numeric(bert_metrics_external$threshold_f1[[1]])
+} else if (!is.null(bert_config) && !is.null(bert_config$threshold_f1)) {
+  as.numeric(bert_config$threshold_f1)
+} else {
+  0.5
+}
+
+overwrite_fig_cache <- FALSE
+```
+
+```{r}
+#| label: theme-and-palettes
+#| message: false
+
+fig_dir <- "../../results/model_evaluation//figures/600ad"
+cache_dir <- "../../results/model_evaluation/cache"
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+
+```
+
+
+```{r}
+theme_modelviz <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),
+    strip.background = element_rect(fill = "grey95", color = NA),
+    plot.caption = element_text(color = "grey35")
+  )
+
+pal_class <- c(
+  "non_christian" = "#D55E00",
+  "christian" = "#0072B2"
+)
+
+pal_model <- c(
+  "Naive Bayes" = "#000000",
+  "Elastic-Net Logistic" = "#E69F00",
+  "Linear SVM" = "#56B4E9",
+  "XGBoost" = "#009E73",
+  "LightGBM" = "#CC79A7"
+)
+```
+
+```{r}
+#| label: helper-functions
+#| message: false
+
+# ------------------------------------------------------------
+# Utilities
+# ------------------------------------------------------------
+first_existing_col <- function(x, candidates) {
+  hit <- intersect(candidates, names(x))
+  if (length(hit)) hit[[1]] else NA_character_
+}
+
+read_table_any <- function(path) {
+  ext <- tolower(tools::file_ext(path))
+  if (ext == "csv") return(readr::read_csv(path, show_col_types = FALSE))
+  if (ext == "tsv") return(readr::read_tsv(path, show_col_types = FALSE))
+  if (ext == "rds") return(readRDS(path))
+  stop("Unsupported file type for: ", path)
+}
+
+metric_threshold_map <- c(
+  naive_bayes = "Naive Bayes",
+  ridge = "Elastic-Net Logistic",
+  svm_platt = "Linear SVM",
+  xgboost = "XGBoost",
+  lightgbm = "LightGBM"
+)
+```
+
+
+```{r}
+auc_from <- function(y_true, prob) {
+  y_true <- factor(as.character(y_true), levels = c("non_christian", "christian"))
+  if (length(unique(stats::na.omit(as.character(y_true)))) < 2) return(NA_real_)
+  as.numeric(pROC::auc(
+    pROC::roc(
+      response = y_true,
+      predictor = safe_prob(prob),
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    )
+  ))
+}
+
+f1_from <- function(y_true, prob, thr = 0.5) {
+  y_true <- factor(as.character(y_true), levels = c("non_christian", "christian"))
+  if (length(unique(stats::na.omit(as.character(y_true)))) < 2) return(NA_real_)
+  pred <- factor(
+    ifelse(prob >= thr, "christian", "non_christian"),
+    levels = c("non_christian", "christian")
+  )
+  cm <- caret::confusionMatrix(
+    pred,
+    factor(y_true, levels = c("non_christian", "christian")),
+    positive = "christian",
+    mode = "prec_recall"
+  )
+  unname(cm$byClass["F1"])
+}
+
+cm_df <- function(y_true, prob, thr = 0.5) {
+  pred <- factor(
+    ifelse(prob >= thr, "christian", "non_christian"),
+    levels = c("non_christian", "christian")
+  )
+  truth <- factor(y_true, levels = c("non_christian", "christian"))
+  table(pred = pred, truth = truth) %>%
+    as.data.frame() %>%
+    rename(n = Freq) %>%
+    mutate(
+      pred = factor(pred, levels = c("non_christian", "christian")),
+      truth = factor(truth, levels = c("non_christian", "christian"))
+    )
+}
+
+add_scaled_columns <- function(x) {
+  x %>%
+    group_by(model) %>%
+    mutate(
+      prob_z = ifelse(sd(prob, na.rm = TRUE) > 0, (prob - mean(prob, na.rm = TRUE)) / sd(prob, na.rm = TRUE), 0),
+      logit_z = ifelse(sd(logit, na.rm = TRUE) > 0, (logit - mean(logit, na.rm = TRUE)) / sd(logit, na.rm = TRUE), 0),
+      score_z = ifelse(sd(score, na.rm = TRUE) > 0, (score - mean(score, na.rm = TRUE)) / sd(score, na.rm = TRUE), 0),
+      prob_01 = ifelse(max(prob, na.rm = TRUE) > min(prob, na.rm = TRUE),
+                       (prob - min(prob, na.rm = TRUE)) / (max(prob, na.rm = TRUE) - min(prob, na.rm = TRUE)), 0.5),
+      logit_01 = ifelse(max(logit, na.rm = TRUE) > min(logit, na.rm = TRUE),
+                        (logit - min(logit, na.rm = TRUE)) / (max(logit, na.rm = TRUE) - min(logit, na.rm = TRUE)), 0.5),
+      score_01 = ifelse(max(score, na.rm = TRUE) > min(score, na.rm = TRUE),
+                        (score - min(score, na.rm = TRUE)) / (max(score, na.rm = TRUE) - min(score, na.rm = TRUE)), 0.5),
+      prob_pct = dplyr::percent_rank(prob),
+      logit_pct = dplyr::percent_rank(logit),
+      score_pct = dplyr::percent_rank(score)
+    ) %>%
+    ungroup()
+}
+
+build_plot_tables <- function(oof_long) {
+  roc_input <- oof_long %>%
+    filter(!is.na(true_label), !is.na(prob)) %>%
+    group_by(model) %>%
+    filter(dplyr::n_distinct(true_label) == 2) %>%
+    ungroup()
+
+  if (nrow(roc_input) == 0) {
+    stop(
+      "roc_input is empty after filtering. This means no model has both ",
+      "'christian' and 'non_christian' labels with non-NA probabilities. ",
+      "Check that the join between corpus_df and model_outputs succeeded ",
+      "and that oof_long contains valid data."
+    )
+  }
+
+  # FIX: drop = TRUE prevents split() from creating empty data frames
+  # for unused factor levels, which would cause pROC::roc() to error.
+  roc_list <- split(roc_input, roc_input$model, drop = TRUE) %>%
+    map(~pROC::roc(
+      .x$true_label,
+      .x$prob,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))
+
+  auc_tbl <- tibble(
+    model = factor(names(roc_list), levels = names(pal_model)),
+    auc = map_dbl(roc_list, ~as.numeric(pROC::auc(.x)))
+  ) %>%
+    mutate(model_lab = paste0(as.character(model), " (AUC=", sprintf("%.3f", auc), ")"))
+
+  roc_df <- map2_dfr(roc_list, names(roc_list), function(r, nm) {
+    tibble(
+      model = factor(nm, levels = names(pal_model)),
+      fpr = 1 - r$specificities,
+      tpr = r$sensitivities
+    )
+  }) %>%
+    left_join(auc_tbl %>% select(model, model_lab), by = "model") %>%
+    mutate(model_lab = factor(model_lab, levels = auc_tbl$model_lab))
+
+  wide_logits <- roc_input %>%
+    select(id, model, logit) %>%
+    distinct() %>%
+    pivot_wider(names_from = model, values_from = logit)
+
+  M <- as.matrix(wide_logits %>% select(-id))
+  rho <- cor(M, method = "spearman", use = "pairwise.complete.obs")
+
+  rho_df <- as.data.frame(rho) %>%
+    mutate(model_x = rownames(.)) %>%
+    pivot_longer(-model_x, names_to = "model_y", values_to = "rho") %>%
+    mutate(
+      model_x = factor(model_x, levels = names(pal_model)),
+      model_y = factor(model_y, levels = names(pal_model))
+    )
+
+  fold_metrics <- roc_input %>%
+    group_by(model, fold) %>%
+    summarise(
+      threshold_youden = first(threshold_youden),
+      F1 = f1_from(true_label, prob, thr = first(threshold_youden)),
+      .groups = "drop"
+    )
+
+  cm_long <- roc_input %>%
+    group_by(model) %>%
+    group_modify(~cm_df(.x$true_label, .x$prob, thr = first(.x$threshold_youden))) %>%
+    ungroup()
+
+  list(
+    roc_list = roc_list,
+    auc_tbl = auc_tbl,
+    roc_df = roc_df,
+    wide_logits = wide_logits,
+    rho = rho,
+    rho_df = rho_df,
+    fold_metrics = fold_metrics,
+    cm_long = cm_long
+  )
+}
+
+save_cache_B <- function(path, plot_tables, top_feats = NULL) {
+  saveRDS(
+    list(
+      created_at = Sys.time(),
+      roc_list = plot_tables$roc_list,
+      auc_tbl = plot_tables$auc_tbl,
+      roc_df = plot_tables$roc_df,
+      wide_logits = plot_tables$wide_logits,
+      rho = plot_tables$rho,
+      rho_df = plot_tables$rho_df,
+      top_feats = top_feats,
+      fold_metrics = plot_tables$fold_metrics,
+      cm_long = plot_tables$cm_long
+    ),
+    path,
+    compress = "xz"
+  )
+}
+
+read_external_oof <- function(path, truth_lookup, model_name, threshold_youden = NULL) {
+  x <- read_table_any(path)
+
+  id_col <- first_existing_col(x, c("row_id", "id", "doc_id"))
+  prob_col <- first_existing_col(x, c("prob_bert", "prob", "prob_christian", "p_christian", "bert_prob"))
+  logit_col <- first_existing_col(x, c("score_bert_logit", "logit", "bert_logit"))
+  score_col <- first_existing_col(x, c("score_bert_margin", "score", "margin", "bert_score"))
+  fold_col <- first_existing_col(x, c("fold", "fold_id"))
+
+  stopifnot(!is.na(id_col), !is.na(prob_col))
+
+  thr_col <- first_existing_col(x, c("threshold_youden", "youden_threshold", "threshold"))
+  thr_val <- if (!is.null(threshold_youden) && length(threshold_youden) && is.finite(threshold_youden)) {
+    as.numeric(threshold_youden[[1]])
+  } else if (!is.na(thr_col)) {
+    as.numeric(x[[thr_col]][[1]])
+  } else {
+    0.5
+  }
+
+  out <- x %>%
+    transmute(
+      row_id = suppressWarnings(as.integer(as.character(.data[[id_col]]))),
+      doc_id = if ("id" %in% names(x)) as.character(.data[["id"]]) else as.character(.data[[id_col]]),
+      prob = safe_prob(.data[[prob_col]]),
+      logit = if (!is.na(logit_col)) as.numeric(.data[[logit_col]]) else safe_logit(.data[[prob_col]]),
+      score = if (!is.na(score_col)) {
+        as.numeric(.data[[score_col]])
+      } else if (!is.na(logit_col)) {
+        as.numeric(.data[[logit_col]])
+      } else {
+        safe_logit(.data[[prob_col]])
+      },
+      fold = if (!is.na(fold_col)) as.integer(.data[[fold_col]]) else NA_integer_
+    ) %>%
+    left_join(truth_lookup %>% select(row_id, true_label_row = true_label), by = "row_id") %>%
+    left_join(truth_lookup %>% select(id, true_label_id = true_label), by = c("doc_id" = "id")) %>%
+    mutate(true_label = coalesce(true_label_row, true_label_id)) %>%
+    transmute(
+      id = ifelse(!is.na(row_id), as.character(row_id), as.character(doc_id)),
+      fold = fold,
+      true_label = factor(true_label, levels = c("non_christian", "christian")),
+      model = model_name,
+      prob = prob,
+      logit = logit,
+      score = score,
+      threshold_youden = thr_val
+    )
+
+  out
+}
+
+merge_external_full_predictions <- function(df_in, path, model_stub = "bert", threshold_youden = NULL, threshold_f1 = NULL) {
+  x <- read_table_any(path)
+
+  id_col <- first_existing_col(x, c("row_id", "id", "doc_id"))
+  prob_col <- first_existing_col(x, c("prob_bert", "prob", "prob_christian", "p_christian", "bert_prob"))
+  logit_col <- first_existing_col(x, c("score_bert_logit", "logit", "bert_logit"))
+  score_col <- first_existing_col(x, c("score_bert_margin", "score", "margin", "bert_score"))
+
+  stopifnot(!is.na(id_col), !is.na(prob_col))
+
+  thr_y_col <- first_existing_col(x, c("threshold_youden", "youden_threshold", "threshold"))
+  thr_f1_col <- first_existing_col(x, c("threshold_f1", "f1_threshold"))
+  thr_y <- if (!is.null(threshold_youden) && length(threshold_youden) && is.finite(threshold_youden)) {
+    as.numeric(threshold_youden[[1]])
+  } else if (!is.na(thr_y_col)) {
+    as.numeric(x[[thr_y_col]][[1]])
+  } else {
+    0.5
+  }
+  thr_f1 <- if (!is.null(threshold_f1) && length(threshold_f1) && is.finite(threshold_f1)) {
+    as.numeric(threshold_f1[[1]])
+  } else if (!is.na(thr_f1_col)) {
+    as.numeric(x[[thr_f1_col]][[1]])
+  } else {
+    thr_y
+  }
+
+  tmp <- x %>%
+    transmute(
+      row_id = .data[[id_col]],
+      prob_ext = safe_prob(.data[[prob_col]]),
+      logit_ext = if (!is.na(logit_col)) as.numeric(.data[[logit_col]]) else safe_logit(.data[[prob_col]]),
+      score_ext = if (!is.na(score_col)) {
+        as.numeric(.data[[score_col]])
+      } else if (!is.na(logit_col)) {
+        as.numeric(.data[[logit_col]])
+      } else {
+        safe_logit(.data[[prob_col]])
+      }
+    )
+
+  out <- df_in %>%
+    left_join(tmp, by = "row_id")
+
+  out[[paste0("prob_", model_stub)]] <- out$prob_ext
+  out[[paste0("score_", model_stub, "_logit")]] <- out$logit_ext
+  out[[paste0("score_", model_stub, "_raw")]] <- out$score_ext
+  out[[paste0("threshold_", model_stub, "_youden")]] <- thr_y
+  out[[paste0("threshold_", model_stub, "_f1")]] <- thr_f1
+  out[[paste0("label_", model_stub, "_youden")]] <- ifelse(out$prob_ext >= thr_y, "christian", "non_christian")
+  out[[paste0("label_", model_stub, "_f1")]] <- ifelse(out$prob_ext >= thr_f1, "christian", "non_christian")
+  out[[paste0("label_", model_stub)]] <- out[[paste0("label_", model_stub, "_youden")]]
+
+  out %>%
+    select(-prob_ext, -logit_ext, -score_ext)
+}
+
+read_external_learning_curve <- function(path, model_name) {
+  x <- read_table_any(path)
+
+  frac_col <- first_existing_col(x, c("frac", "fraction", "train_frac"))
+  rep_col  <- first_existing_col(x, c("rep", "repeat", "repetition"))
+  auc_col  <- first_existing_col(x, c("auc", "roc_auc"))
+  f1_col   <- first_existing_col(x, c("f1", "f1_score", "f1_youden", "f1_f1"))
+
+  stopifnot(!is.na(frac_col), !is.na(rep_col), !is.na(auc_col))
+
+  x %>%
+    transmute(
+      model = model_name,
+      frac = as.numeric(.data[[frac_col]]),
+      rep = as.integer(.data[[rep_col]]),
+      auc = as.numeric(.data[[auc_col]]),
+      f1 = if (!is.na(f1_col)) as.numeric(.data[[f1_col]]) else NA_real_
+    )
+}
+
+read_external_features <- function(path, model_name) {
+  x <- read_table_any(path)
+
+  feat_col <- first_existing_col(x, c("feature", "term", "token"))
+  imp_col  <- first_existing_col(x, c("importance", "weight", "coef", "estimate", "value"))
+  dir_col  <- first_existing_col(x, c("direction", "class", "side"))
+
+  if (is.na(feat_col) || is.na(imp_col)) return(NULL)
+
+  x %>%
+    transmute(
+      model = model_name,
+      feature = as.character(.data[[feat_col]]),
+      importance = as.numeric(.data[[imp_col]]),
+      direction = if (!is.na(dir_col)) as.character(.data[[dir_col]]) else NA_character_
+    )
+}
+
+make_feature_plot <- function(top_feats) {
+  if (is.null(top_feats) || !nrow(top_feats)) return(NULL)
+
+  plot_df <- top_feats %>%
+    group_by(model) %>%
+    slice_max(order_by = abs(importance), n = 20, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(feature = reorder(feature, importance))
+
+  ggplot(plot_df, aes(x = importance, y = feature, fill = model)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ model, scales = "free_y") +
+    scale_fill_manual(values = pal_model) +
+    labs(
+      x = "Importance",
+      y = NULL
+    ) +
+    theme_modelviz
+}
+```
+
+```{r}
+#| label: build-oof-long
+#| message: false
+
+threshold_tbl <- thresholds %>%
+  mutate(model = recode(model, !!!metric_threshold_map)) %>%
+  select(model, threshold_youden)
+
+if (!nrow(threshold_tbl)) {
+  threshold_tbl <- tibble(
+    model = names(pal_model),
+    threshold_youden = 0.5
+  )
+}
+
+cache_A <- file.path(cache_dir, "cache_A_oof_learning_bertfix.rds")
+cache_B <- file.path(cache_dir, "cache_B_plot_tables_bertfix.rds")
+
+if (file.exists(cache_A) && !overwrite_fig_cache) {
+  A <- readRDS(cache_A)
+  oof_long <- A$oof_long
+  lc_res <- A$lc_res
+  pal_model <- A$pal_model
+  pal_class <- A$pal_class
+  threshold_tbl <- A$threshold_tbl
+} else {
+  truth_lookup <- df_labeled %>%
+    mutate(
+      manual_label = normalize_binary_label(manual_label),
+      true_label = factor(manual_label, levels = c("non_christian", "christian"))
+    ) %>%
+    arrange(row_id) %>%
+    select(row_id, id, true_label)
+
+  fold_lookup <- if ("fold_id" %in% names(corpus_df)) {
+    corpus_df %>%
+      filter(!is.na(manual_label)) %>%
+      select(row_id, fold = fold_id) %>%
+      distinct()
+  } else {
+    set.seed(123)
+    y_fold <- df_labeled %>%
+      mutate(manual_label = normalize_binary_label(manual_label)) %>%
+      arrange(row_id) %>%
+      pull(manual_label)
+
+    k_fold <- min(k_folds_outer, min(table(y_fold)))
+    folds_fig <- caret::createFolds(y_fold, k = k_fold, returnTrain = FALSE)
+    tmp_fold <- tibble(row_id = df_labeled %>% arrange(row_id) %>% pull(row_id), fold = NA_integer_)
+    for (i in seq_along(folds_fig)) tmp_fold$fold[folds_fig[[i]]] <- i
+    tmp_fold
+  }
+
+  # Use labeled rows with non-missing saved OOF/cross-fitted predictions.
+  oof_base <- corpus_df %>%
+    filter(
+      !is.na(manual_label),
+      manual_label %in% c("christian", "non_christian"),
+      !is.na(prob_nb),
+      !is.na(prob_ridge),
+      !is.na(prob_svm),
+      !is.na(prob_xgb),
+      !is.na(prob_lgb)
+    ) %>%
+    mutate(manual_label = normalize_binary_label(manual_label)) %>%
+    left_join(fold_lookup, by = "row_id") %>%
+    transmute(
+      id = as.character(row_id),
+      fold = fold,
+      true_label = factor(manual_label, levels = c("non_christian", "christian")),
+      prob_nb = prob_nb,
+      logit_nb = score_nb_logit,
+      score_nb = score_nb_logit,
+      prob_ridge = prob_ridge,
+      logit_ridge = score_ridge_logit,
+      score_ridge = score_ridge_logit,
+      prob_svm = prob_svm,
+      logit_svm = score_svm_logit,
+      score_svm = score_svm_margin,
+      prob_xgb = prob_xgb,
+      logit_xgb = score_xgb_logit,
+      score_xgb = score_xgb_logit,
+      prob_lgb = prob_lgb,
+      logit_lgb = score_lgb_logit,
+      score_lgb = score_lgb_margin
+    )
+
+  if (nrow(oof_base) == 0) {
+    stop(
+      "oof_base has 0 rows. This means no labeled rows in corpus_df have ",
+      "non-NA prediction columns (prob_nb, prob_ridge, etc.). ",
+      "Most likely cause: the join between df_raw and model_outputs failed ",
+      "because row_id values did not match. The join used key(s): '",
+      paste(join_keys, collapse = "', '"), "'. ",
+      "Verify that id values in your corpus CSV match those in the model ",
+      "outputs CSV."
+    )
+  }
+
+  message("oof_base: ", nrow(oof_base), " rows, ",
+          sum(oof_base$true_label == "christian"), " christian, ",
+          sum(oof_base$true_label == "non_christian"), " non_christian")
+
+  oof_long <- bind_rows(
+    oof_base %>% transmute(id, fold, true_label, model = "Naive Bayes", prob = safe_prob(prob_nb), logit = logit_nb, score = score_nb),
+    oof_base %>% transmute(id, fold, true_label, model = "Elastic-Net Logistic", prob = safe_prob(prob_ridge), logit = logit_ridge, score = score_ridge),
+    oof_base %>% transmute(id, fold, true_label, model = "Linear SVM", prob = safe_prob(prob_svm), logit = logit_svm, score = score_svm),
+    oof_base %>% transmute(id, fold, true_label, model = "XGBoost", prob = safe_prob(prob_xgb), logit = logit_xgb, score = score_xgb),
+    oof_base %>% transmute(id, fold, true_label, model = "LightGBM", prob = safe_prob(prob_lgb), logit = logit_lgb, score = score_lgb)
+  ) %>%
+    left_join(threshold_tbl, by = "model")
+
+  if (!is.null(bert_files$oof) && file.exists(bert_files$oof)) {
+    oof_bert <- read_external_oof(
+      path = bert_files$oof,
+      truth_lookup = truth_lookup,
+      model_name = bert_model_name,
+      threshold_youden = bert_threshold_youden
+    )
+    oof_long <- bind_rows(oof_long, oof_bert)
+    threshold_tbl <- bind_rows(
+      threshold_tbl,
+      tibble(model = bert_model_name, threshold_youden = unique(oof_bert$threshold_youden)[1])
+    ) %>%
+      distinct(model, .keep_all = TRUE)
+    pal_model[bert_model_name] <- "#7A3E9D"
+  }
+
+  oof_long <- oof_long %>%
+    mutate(
+      model = factor(model, levels = names(pal_model)),
+      true_label = factor(true_label, levels = c("non_christian", "christian")),
+      threshold_youden = ifelse(is.na(threshold_youden), 0.5, threshold_youden)
+    ) %>%
+    add_scaled_columns()
+
+  # helpful sanity check
+  print(
+    oof_long %>%
+      count(model, true_label) %>%
+      tidyr::pivot_wider(names_from = true_label, values_from = n, values_fill = 0)
+  )
+
+  if (!is.null(bert_files$full) && file.exists(bert_files$full)) {
+    corpus_df <- merge_external_full_predictions(
+      df_in = corpus_df,
+      path = bert_files$full,
+      model_stub = "bert",
+      threshold_youden = bert_threshold_youden,
+      threshold_f1 = bert_threshold_f1
+    )
+  }
+
+  stratified_idx <- function(y, frac, seed = 1, k = 5, min_per_class = 20) {
+    set.seed(seed)
+    y <- factor(y, levels = c("non_christian", "christian"))
+    idx_ch <- which(y == "christian")
+    idx_nc <- which(y == "non_christian")
+
+    n_ch <- min(length(idx_ch), max(min_per_class, k, floor(length(idx_ch) * frac)))
+    n_nc <- min(length(idx_nc), max(min_per_class, k, floor(length(idx_nc) * frac)))
+
+    c(sample(idx_ch, n_ch), sample(idx_nc, n_nc))
+  }
+
+  oof_for_model <- function(model, idx, k = 5, seed = 1, progress_prefix = "", thr = 0.5) {
+    lab_sub <- df_labeled %>%
+      mutate(manual_label = normalize_binary_label(manual_label)) %>%
+      arrange(row_id)
+
+    y <- factor(lab_sub$manual_label[idx], levels = c("non_christian", "christian"))
+    text <- lab_sub$text[idx]
+
+    k_sub <- min(k, min(table(y)))
+    if (is.na(k_sub) || k_sub < 2) k_sub <- 2
+
+    set.seed(seed)
+    folds_sub <- caret::createFolds(y, k = k_sub, returnTrain = FALSE)
+    prob <- rep(NA_real_, length(idx))
+
+    for (fi in seq_along(folds_sub)) {
+      te <- folds_sub[[fi]]
+      tr <- setdiff(seq_along(idx), te)
+      y_tr <- y[tr]
+
+      message(sprintf(
+        "%smodel=%s | fold %d/%d | train n=%d | test n=%d",
+        progress_prefix, model, fi, length(folds_sub), length(tr), length(te)
+      ))
+      flush.console()
+
+      if (model == "Naive Bayes") {
+        x_tr <- make_counts_dfm(text[tr], latin_stops)
+        x_te <- dfm_match(make_counts_dfm(text[te], latin_stops), featnames(x_tr))
+        fit <- fit_nb_with_platt(
+          x_tr,
+          y_tr,
+          inner_k = min(k_folds_inner, min(table(y_tr))),
+          seed = seed + fi
+        )
+        pred <- predict_nb_calibrated(fit, x_te)
+        prob[te] <- safe_prob(pred$prob)
+      }
+
+      if (model %in% c("Elastic-Net Logistic", "Linear SVM", "XGBoost", "LightGBM")) {
+        tfidf_fit_fold <- fit_tfidf(text[tr], latin_stops, min_df = min_docfreq)
+        x_tr <- transform_tfidf(text[tr], tfidf_fit_fold, latin_stops)
+        x_te <- transform_tfidf(text[te], tfidf_fit_fold, latin_stops)
+      }
+
+      if (model == "Elastic-Net Logistic") {
+        fit <- fit_ridge_with_platt(
+          x_tr,
+          y_tr,
+          lambda = ridge_fixed_lambda,
+          alpha = ridge_fixed_alpha,
+          inner_k = min(k_folds_inner, min(table(y_tr))),
+          seed = seed + fi
+        )
+        pred <- predict_ridge_calibrated(fit, x_te)
+        prob[te] <- safe_prob(pred$prob)
+      }
+
+      if (model == "Linear SVM") {
+        fit <- fit_svm_with_platt(
+          x_tr,
+          y_tr,
+          cost = svm_fixed_cost,
+          inner_k = min(k_folds_inner, min(table(y_tr))),
+          seed = seed + fi
+        )
+        pred <- predict_svm_calibrated(fit, x_te)
+        prob[te] <- safe_prob(pred$prob)
+      }
+
+      if (model == "XGBoost") {
+        fit <- fit_xgb_with_platt(
+          x_tr,
+          y_tr,
+          inner_k = min(k_folds_inner, min(table(y_tr))),
+          seed = seed + fi
+        )
+        pred <- predict_xgb_calibrated(fit, x_te)
+        prob[te] <- safe_prob(pred$prob)
+      }
+
+      if (model == "LightGBM") {
+        fit <- fit_lgb_with_platt(
+          x_tr,
+          y_tr,
+          inner_k = min(k_folds_inner, min(table(y_tr))),
+          seed = seed + fi
+        )
+        pred <- predict_lgb_calibrated(fit, x_te)
+        prob[te] <- safe_prob(pred$prob)
+      }
+    }
+
+    tibble(
+      model = model,
+      auc = auc_from(y, prob),
+      f1 = f1_from(y, prob, thr = thr)
+    )
+  }
+
+  run_learning_curves_cached <- function(
+    fractions = c(0.10, 0.25, 0.50, 0.75, 1.00),
+    reps = 2,
+    k = 5,
+    min_per_class = 20,
+    cache_jobs = file.path(cache_dir, "lc_jobs"),
+    master_cache = file.path(cache_dir, "lc_res_full.rds"),
+    overwrite = FALSE
+  ) {
+    dir.create(cache_jobs, recursive = TRUE, showWarnings = FALSE)
+
+    if (file.exists(master_cache) && !overwrite) {
+      return(readRDS(master_cache))
+    }
+
+    y_all <- df_labeled %>%
+      mutate(manual_label = normalize_binary_label(manual_label)) %>%
+      arrange(row_id) %>%
+      pull(manual_label)
+
+    models <- c("Naive Bayes", "Elastic-Net Logistic", "Linear SVM", "XGBoost", "LightGBM")
+
+    job_grid <- tidyr::expand_grid(frac = fractions, rep = seq_len(reps), model = models) %>%
+      mutate(
+        frac_pct = round(frac * 100),
+        model_key = gsub("[^A-Za-z0-9]+", "_", model),
+        job_file = file.path(cache_jobs, sprintf("lc_frac%03d_rep%02d_%s.rds", frac_pct, rep, model_key))
+      )
+
+    sub_idx_tbl <- tidyr::expand_grid(frac = fractions, rep = seq_len(reps)) %>%
+      mutate(
+        seed = 7000 + rep,
+        idx = purrr::map2(frac, seed, ~stratified_idx(y_all, .x, .y, k = k, min_per_class = min_per_class))
+      ) %>%
+      select(frac, rep, idx)
+
+    job_grid <- left_join(job_grid, sub_idx_tbl, by = c("frac", "rep"))
+
+    for (j in seq_len(nrow(job_grid))) {
+      frac <- job_grid$frac[j]
+      repi <- job_grid$rep[j]
+      model <- job_grid$model[j]
+      idx <- job_grid$idx[[j]]
+      job_file <- job_grid$job_file[j]
+
+      if (file.exists(job_file) && !overwrite) next
+
+      res <- oof_for_model(
+        model = model,
+        idx = idx,
+        k = k,
+        seed = 9000 + repi,
+        thr = threshold_tbl$threshold_youden[match(model, threshold_tbl$model)] %||% 0.5,
+        progress_prefix = sprintf("[LC frac=%.2f rep=%d] ", frac, repi)
+      ) %>%
+        mutate(frac = frac, rep = repi)
+
+      saveRDS(res, job_file, compress = "xz")
+    }
+
+    files <- job_grid$job_file[file.exists(job_grid$job_file)]
+    lc_res <- bind_rows(lapply(files, readRDS)) %>%
+      mutate(
+        model = factor(model, levels = names(pal_model)),
+        frac = as.numeric(frac),
+        rep = as.integer(rep)
+      )
+
+    saveRDS(lc_res, master_cache, compress = "xz")
+    lc_res
+  }
+
+  fractions <- c(0.10, 0.25, 0.50, 0.75, 1.00)
+  reps <- 2
+
+  lc_res <- run_learning_curves_cached(
+    fractions = fractions,
+    reps = reps,
+    k = min(k_folds_outer, min(table(df_labeled$manual_label))),
+    min_per_class = 20,
+    cache_jobs = file.path(cache_dir, "lc_jobs"),
+    master_cache = file.path(cache_dir, "lc_res_full.rds"),
+    overwrite = overwrite_fig_cache
+  )
+
+  if (!is.null(bert_files$learning_curve) && file.exists(bert_files$learning_curve)) {
+    lc_bert <- read_external_learning_curve(bert_files$learning_curve, bert_model_name)
+    lc_res <- bind_rows(lc_res, lc_bert)
+    if (!bert_model_name %in% names(pal_model)) pal_model[bert_model_name] <- "#7A3E9D"
+  }
+
+  saveRDS(
+    list(
+      created_at = Sys.time(),
+      oof_long = oof_long,
+      lc_res = lc_res,
+      pal_model = pal_model,
+      pal_class = pal_class,
+      threshold_tbl = threshold_tbl
+    ),
+    cache_A,
+    compress = "xz"
+  )
+}
+```
+
+```{r}
+#| label: plot-tables
+#| message: false
+
+if (file.exists(cache_B) && !overwrite_fig_cache) {
+  B <- readRDS(cache_B)
+  roc_list <- B$roc_list
+  auc_tbl <- B$auc_tbl
+  roc_df <- B$roc_df
+  wide_logits <- B$wide_logits
+  rho <- B$rho
+  rho_df <- B$rho_df
+  top_feats <- B$top_feats
+  fold_metrics <- B$fold_metrics
+  cm_long <- B$cm_long
+} else {
+  plot_tables <- build_plot_tables(oof_long)
+  roc_list <- plot_tables$roc_list
+  auc_tbl <- plot_tables$auc_tbl
+  roc_df <- plot_tables$roc_df
+  wide_logits <- plot_tables$wide_logits
+  rho <- plot_tables$rho
+  rho_df <- plot_tables$rho_df
+  fold_metrics <- plot_tables$fold_metrics
+  cm_long <- plot_tables$cm_long
+
+  top_feats <- if (!is.null(bert_files$features) && file.exists(bert_files$features)) {
+    read_external_features(bert_files$features, bert_model_name)
+  } else {
+    NULL
+  }
+
+  save_cache_B(cache_B, plot_tables, top_feats = top_feats)
+}
+```
+
+```{r}
+#| label: fig-roc
+#| fig-cap: "ROC curves (out-of-fold)"
+#| fig-width: 8.8
+#| fig-height: 6.2
+
+p_roc <- ggplot(roc_df, aes(x = fpr, y = tpr, color = model_lab)) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.8, linetype = "dashed", color = "grey65") +
+  geom_path(linewidth = 1.2, alpha = 0.95) +
+  coord_equal() +
+  scale_color_manual(values = setNames(unname(pal_model[as.character(auc_tbl$model)]), auc_tbl$model_lab)) +
+  labs(
+    x = "False Positive Rate",
+    y = "True Positive Rate",
+    color = NULL
+  ) +
+  theme_modelviz
+
+ggsave(file.path(fig_dir, "01_roc_all_models.png"), p_roc, width = 8.8, height = 6.2, dpi = 320)
+p_roc
+```
+
+
+```{r}
+#| label: fig-density
+#| fig-cap: "OOF score distributions (density)"
+#| fig-width: 8.8
+#| fig-height: 10.0
+
+p_density <- ggplot(oof_long, aes(x = logit, color = true_label, fill = true_label)) +
+  geom_density(alpha = 0.22, linewidth = 1.0) +
+  facet_wrap(~ model, scales = "free", ncol = 1) +
+  scale_color_manual(values = pal_class) +
+  scale_fill_manual(values = pal_class) +
+  labs(
+    x = "OOF logit score",
+    y = "Density",
+    color = NULL,
+    fill = NULL
+  ) +
+  theme_modelviz +
+  theme(legend.position = "top")
+
+ggsave(file.path(fig_dir, "02b_oof_distributions_density.png"), p_density, width = 8.8, height = 10.0, dpi = 320)
+p_density
+```
+
+```{r}
+#| label: fig-learning-curves
+#| fig-cap: "Learning curves (OOF ROC-AUC)"
+#| fig-width: 9.8
+#| fig-height: 6.2
+
+p_lc_auc <- ggplot(lc_res, aes(x = frac * 100, y = auc, color = model)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 1.1) +
+  stat_summary(fun = mean, geom = "point", size = 2.2) +
+  stat_summary(
+    fun.data = mean_sdl,
+    fun.args = list(mult = 1),
+    geom = "ribbon",
+    aes(fill = model),
+    alpha = 0.15,
+    color = NA
+  ) +
+  scale_color_manual(values = pal_model) +
+  scale_fill_manual(values = pal_model) +
+  scale_x_continuous(breaks = sort(unique(lc_res$frac * 100))) +
+  labs(
+    x = "% of labeled training data",
+    y = "OOF ROC-AUC",
+    color = NULL,
+    fill = NULL
+  ) +
+  theme_modelviz +
+  theme(legend.position = "top")
+
+ggsave(file.path(fig_dir, "03_learning_curves_auc.png"), p_lc_auc, width = 9.8, height = 6.2, dpi = 320)
+p_lc_auc
+```
+
+```{r}
+#| label: fig-correlation
+#| fig-cap: "Correlation between model-predicted logits"
+#| fig-width: 8.2
+#| fig-height: 6.8
+
+library(ggplot2)
+
+rho_min <- min(rho_df$rho)
+
+rho_df$rho_scaled <- 0.5 + 0.5 * (rho_df$rho - rho_min) / (1 - rho_min)
+
+p_cor <- ggplot(rho_df, aes(x = model_x, y = model_y)) +
+  geom_tile(fill = "grey96", color = "white", linewidth = 0.8) +
+  geom_point(aes(size = rho_scaled, color = rho), show.legend = TRUE) +
+  geom_text(aes(label = sprintf("%.2f", rho)),
+            size = 3.4, fontface = "bold", color = "white") +
+  scale_size_continuous(
+    range  = c(8, 22),
+    guide  = "none"
+  ) +
+  scale_color_gradientn(
+    colours = c("#0D0887", "#5B02A3", "#9A179B", "#CB4678",
+                "#EB7852", "#FBB32F", "#F0F921"),
+    limits  = c(floor(rho_min * 10) / 10, 1),
+    name    = "Spearman's Correlation",
+    guide   = guide_colorbar(
+      barwidth  = 1.2,
+      barheight = 12,
+      title.position = "top"
+    )
+  ) +
+  coord_fixed() +
+  theme_modelviz +
+  theme(
+    axis.title      = element_blank(),
+    axis.text.x     = element_text(angle = 30, hjust = 1, size = 11),
+    axis.text.y     = element_text(size = 11),
+    panel.grid      = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    legend.position  = "right",
+    legend.title     = element_text(face = "bold", size = 10),
+    legend.text      = element_text(size = 9)
+  )
+
+ggsave(file.path(fig_dir, "04_logit_correlation_heatmap.png"),
+       p_cor, width = 8.2, height = 6.8, dpi = 320)
+p_cor
+```
+
+```{r}
+#| label: fig-foldwise-f1
+#| fig-cap: "Fold-wise F1 distribution (OOF)"
+#| fig-width: 9.2
+#| fig-height: 5.8
+
+p_f1_fold <- ggplot(fold_metrics, aes(x = model, y = F1, color = model)) +
+  geom_violin(trim = FALSE, alpha = 0.15) +
+  geom_point(position = position_jitter(width = 0.08, height = 0), size = 2.1, alpha = 0.85) +
+  scale_color_manual(values = pal_model) +
+  labs(
+    x = NULL,
+    y = "F1 (per fold)",
+    color = NULL
+  ) +
+  theme_modelviz +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1), legend.position = "none")
+
+ggsave(file.path(fig_dir, "S1_foldwise_f1.png"), p_f1_fold, width = 9.2, height = 5.8, dpi = 320)
+p_f1_fold
+```
+
+```{r}
+#| label: fig-confusion-matrices
+#| fig-cap: "Confusion matrices (OOF)"
+#| fig-width: 11.5
+#| fig-height: 6.8
+
+p_cm <- ggplot(cm_long, aes(x = truth, y = pred, fill = n)) +
+  geom_tile(color = "white", linewidth = 0.7) +
+  geom_text(aes(label = n), size = 5.0) +
+  facet_wrap(~ model, ncol = 3) +
+  scale_fill_gradientn(colors = viridisLite::viridis(12), name = "Count") +
+  labs(
+    x = "True label",
+    y = "Predicted label"
+  ) +
+  theme_modelviz +
+  theme(legend.position = "right")
+
+ggsave(file.path(fig_dir, "S2_confusion_matrices.png"), p_cm, width = 11.5, height = 6.8, dpi = 320)
+p_cm
+```
+
+```{r}
+#| label: fig-features
+#| fig-cap: "Top features / importance summaries"
+#| fig-width: 11.0
+#| fig-height: 7.0
+#| eval: !expr '!is.null(top_feats)'
+
+p_feats <- make_feature_plot(top_feats)
+if (!is.null(p_feats)) {
+  ggsave(file.path(fig_dir, "S3_features.png"), p_feats, width = 11.0, height = 7.0, dpi = 320)
+  p_feats
+}
+```
+
+```{r}
+#| label: summary-output
+#| message: false
+
+# Return summary list (available in environment after render)
+list(
+  oof_long = oof_long,
+  lc_res = lc_res,
+  threshold_tbl = threshold_tbl,
+  p_roc = p_roc,
+  p_density = p_density,
+  p_lc_auc = p_lc_auc,
+  p_cor = p_cor,
+  p_feats = if (exists("p_feats")) p_feats else NULL,
+  p_f1_fold = p_f1_fold,
+  p_cm = p_cm
+)
+```
+
+

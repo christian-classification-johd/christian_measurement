@@ -1,0 +1,17 @@
+{
+  "model_name": "ashleygong03/bamman-burns-latin-bert",
+  "max_length": 512,
+  "train_batch_size": 8,
+  "eval_batch_size": 16,
+  "grad_accum_steps": 2,
+  "lr": 2e-05,
+  "weight_decay": 0.01,
+  "n_epochs": 4,
+  "warmup_ratio": 0.1,
+  "patience": 1,
+  "outer_folds": 5,
+  "val_frac": 0.1,
+  "threshold_youden": 0.28288788290887634,
+  "threshold_f1": 0.5523004454214964,
+  "temperature_full": 0.8624210953712463
+}

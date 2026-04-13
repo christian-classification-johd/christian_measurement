@@ -8,7 +8,7 @@
 
 ## scripts
 
-`/scripts` has all of the classifier models, model evaluation, temporal confounding regression analyses, and lexical features in addition to the data processing scripts.
+`scripts` has all of the classifier models, model evaluation, temporal confounding regression analyses, and lexical features in addition to the data processing scripts.
 
 ## results
 

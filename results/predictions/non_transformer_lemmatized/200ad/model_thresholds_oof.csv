@@ -1,0 +1,6 @@
+model,threshold_youden,threshold_f1,threshold_scope
+naive_bayes,0.45731459964552346,0.46981909879605954,full_labeled_cross_fitted_calibrated
+svm_platt,0.444880611748352,0.45289618792472475,full_labeled_cross_fitted_calibrated
+xgboost,0.4647955894453807,0.4767932606567549,full_labeled_cross_fitted_calibrated
+lightgbm,0.4854081630224512,0.4863594998849427,full_labeled_cross_fitted_calibrated
+ridge,0.45665339723833515,0.4575576246954393,full_labeled_cross_fitted_calibrated

@@ -1,0 +1,7 @@
+score,model,model_pretty,waic
+score_bert_logit,label_date_linear_creator,Label + linear date + creator,1849.8575591892477
+score_lgb_logit,label_date_rw1_creator,Label + RW1 date + creator,1281.201478629078
+score_nb_logit,label_date_rw2_creator,Label + RW2 date + creator,3041.5506976710035
+score_ridge_logit,label_date_rw2_creator,Label + RW2 date + creator,1031.8235041252003
+score_svm_logit,label_date_rw1_creator,Label + RW1 date + creator,1526.3364241147985
+score_xgb_logit,label_date_rw1_creator,Label + RW1 date + creator,1306.538320051678

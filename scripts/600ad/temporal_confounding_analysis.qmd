@@ -1,0 +1,1758 @@
+---
+title: "Temporal confounding analysis"
+format: html
+editor: visual
+---
+
+## Temporal confounding analysis
+
+```{r}
+library(tidyverse)
+library(INLA)
+library(scales)
+library(forcats)
+library(grid)
+
+path <- "../../results/predictions/non_transformer_lemmatized/600ad/corpus_600ad_model_outputs_oof.csv"
+bert_dir <- "../../results/predictions/bert_outputs_unlemmatized/600ad"
+results_path <- "../../results/temporal_confounding/600ad/"
+
+rw_hyper <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+iid_hyper <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+
+ensure_dirs <- function(...) {
+  dirs <- c(...)
+  purrr::walk(dirs, ~ dir.create(.x, showWarnings = FALSE, recursive = TRUE))
+  invisible(dirs)
+}
+
+# ── Colour palette ──────────────────────────────────────────────────
+pal_christian     <- "#1B4965"
+pal_non_christian <- "#6C757D"
+pal_accent        <- "#C1121F"
+pal_grid          <- "grey90"
+pal_axis          <- "grey25"
+
+theme_fig <- function(base_size = 11.5) {
+  theme_minimal(base_size = base_size, base_family = "Helvetica") +
+    theme(
+      plot.title       = element_blank(),
+      plot.subtitle    = element_blank(),
+      plot.caption     = element_blank(),
+      axis.title       = element_text(size = 10.5, color = pal_axis, margin = margin(t = 4, r = 4)),
+      axis.text        = element_text(size = 9.5, color = pal_axis),
+      axis.text.x      = element_text(margin = margin(t = 3)),
+      axis.text.y      = element_text(margin = margin(r = 3)),
+      strip.text       = element_text(size = 10.5, face = "bold", color = pal_axis),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.major.y = element_line(linewidth = 0.25, color = pal_grid),
+      panel.spacing    = unit(1.4, "lines"),
+      legend.position  = "right",
+      legend.title     = element_blank(),
+      legend.text      = element_text(size = 9.5, color = pal_axis),
+      axis.ticks       = element_line(linewidth = 0.25, color = "grey70"),
+      axis.ticks.length = unit(2, "pt"),
+      plot.margin      = margin(8, 12, 8, 8)
+    )
+}
+
+save_plot <- function(p, filename, plot_dir, width, height, dpi = 700) {
+  ggsave(
+    file.path(plot_dir, paste0(filename, ".pdf")),
+    p,
+    width = width,
+    height = height,
+    device = grDevices::pdf,
+    bg = "white"
+  )
+  if (requireNamespace("ragg", quietly = TRUE)) {
+    ggsave(
+      file.path(plot_dir, paste0(filename, ".png")),
+      p,
+      width = width,
+      height = height,
+      dpi = dpi,
+      device = ragg::agg_png,
+      bg = "white"
+    )
+  }
+}
+
+find_existing_file <- function(path = NULL, dir = NULL, pattern = NULL) {
+  if (!is.null(path) && file.exists(path)) return(path)
+  if (is.null(dir) || is.null(pattern) || !dir.exists(dir)) return(NA_character_)
+  hits <- list.files(dir, pattern = pattern, full.names = TRUE)
+  if (length(hits) == 0) return(NA_character_)
+  hits[[1]]
+}
+
+# ── Display-name mapping ───────────────────────────────────────────
+# Input columns still carry the legacy name "ridge"; we map to
+# "Elastic net" everywhere that is user-facing.
+pretty_score_fixed <- function(x) {
+  dplyr::recode(
+    x,
+    score_nb_logit    = "NB",
+    score_ridge_logit = "Elastic net",
+    score_svm_logit   = "SVM",
+    score_xgb_logit   = "XGBoost",
+    score_lgb_logit   = "LightGBM",
+    score_bert_logit  = "Latin BERT",
+    .default = x
+  )
+}
+
+pretty_score_general <- function(x) {
+  x %>%
+    str_remove("^score_") %>%
+    str_remove("_logit$") %>%
+    str_replace_all("_", " ") %>%
+    str_to_title() %>%
+    str_replace("\\bNb\\b",      "NB") %>%
+    str_replace("\\bSvm\\b",     "SVM") %>%
+    str_replace("\\bXgb\\b",     "XGBoost") %>%
+    str_replace("\\bLgb\\b",     "LightGBM") %>%
+    str_replace("\\bBert\\b",    "Latin BERT") %>%
+    str_replace("(?i)ridge",     "Elastic net")
+}
+
+waic_strength <- function(x) {
+  case_when(
+    is.na(x)  ~ NA_character_,
+    x < 2     ~ "negligible",
+    x < 6     ~ "small",
+    x < 10    ~ "moderate",
+    TRUE      ~ "large"
+  )
+}
+
+fast_auc <- function(score, y01) {
+  keep <- is.finite(score) & !is.na(y01)
+  score <- score[keep]
+  y01   <- y01[keep]
+  n1 <- sum(y01 == 1)
+  n0 <- sum(y01 == 0)
+  if (n1 == 0 || n0 == 0) return(NA_real_)
+  r <- rank(score, ties.method = "average")
+  (sum(r[y01 == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+
+clean_label <- function(x) {
+  x <- str_to_lower(str_squish(as.character(x)))
+  case_when(
+    x %in% c("christian", "1", "yes", "true")                                       ~ "christian",
+    x %in% c("non_christian", "non christian", "non-christian", "0", "no", "false")  ~ "non_christian",
+    TRUE ~ NA_character_
+  )
+}
+
+safe_bind_rows <- function(x) {
+  x <- purrr::compact(x)
+  if (length(x) == 0) tibble() else bind_rows(x)
+}
+
+safe_standardize <- function(x) {
+  s <- sd(x, na.rm = TRUE)
+  m <- mean(x, na.rm = TRUE)
+  if (!is.finite(s) || s == 0) return(rep(0, length(x)))
+  (x - m) / s
+}
+
+pick_best <- function(df, filter_expr = NULL) {
+  filter_quo <- rlang::enquo(filter_expr)
+  x <- df
+  if (!rlang::quo_is_null(filter_quo)) {
+    x <- dplyr::filter(x, !!filter_quo)
+  }
+  if (nrow(x) == 0) return(tibble())
+  x %>%
+    group_by(score) %>%
+    slice_min(waic, n = 1, with_ties = FALSE) %>%
+    ungroup()
+}
+
+nice_x_breaks <- function(x, n = 5) {
+  scales::breaks_extended(n = n)(x)
+}
+
+robust_breaks <- function(x, n_bins = 14) {
+  br <- unique(quantile(x, probs = seq(0, 1, length.out = n_bins + 1), na.rm = TRUE, type = 2))
+  if (length(br) < 4) {
+    br <- pretty(x, n = n_bins)
+    br <- br[br >= min(x, na.rm = TRUE) & br <= max(x, na.rm = TRUE)]
+    br <- unique(c(min(x, na.rm = TRUE), br, max(x, na.rm = TRUE)))
+  }
+  unique(br)
+}
+
+make_bin_means <- function(df, n_bins = 14, by_label = FALSE) {
+  br <- robust_breaks(df$date_mid, n_bins = n_bins)
+  out <- df %>%
+    mutate(time_bin = cut(date_mid, breaks = br, include.lowest = TRUE, labels = FALSE)) %>%
+    filter(!is.na(time_bin))
+
+  if (by_label) {
+    out %>%
+      group_by(manual_label, time_bin) %>%
+      summarise(
+        date_mid = median(date_mid, na.rm = TRUE),
+        n = n(),
+        mean_y = mean(y, na.rm = TRUE),
+        se_y = sd(y, na.rm = TRUE) / sqrt(n),
+        lower = if_else(n > 1, mean_y - 1.96 * se_y, mean_y),
+        upper = if_else(n > 1, mean_y + 1.96 * se_y, mean_y),
+        .groups = "drop"
+      )
+  } else {
+    out %>%
+      group_by(time_bin) %>%
+      summarise(
+        date_mid = median(date_mid, na.rm = TRUE),
+        n = n(),
+        mean_y = mean(y, na.rm = TRUE),
+        se_y = sd(y, na.rm = TRUE) / sqrt(n),
+        lower = if_else(n > 1, mean_y - 1.96 * se_y, mean_y),
+        upper = if_else(n > 1, mean_y + 1.96 * se_y, mean_y),
+        .groups = "drop"
+      )
+  }
+}
+
+make_label_time_bins <- function(data, n_bins = 18) {
+  df <- data %>%
+    filter(!is.na(manual_label), is.finite(date_mid)) %>%
+    mutate(y01 = if_else(manual_label == "christian", 1L, 0L)) %>%
+    arrange(date_mid)
+
+  q_breaks <- unique(
+    quantile(df$date_mid, probs = seq(0, 1, length.out = n_bins + 1), na.rm = TRUE, type = 2)
+  )
+  if (length(q_breaks) < 3) {
+    q_breaks <- pretty(df$date_mid, n = n_bins)
+    q_breaks <- q_breaks[q_breaks >= min(df$date_mid, na.rm = TRUE) &
+      q_breaks <= max(df$date_mid, na.rm = TRUE)]
+    q_breaks <- unique(c(min(df$date_mid, na.rm = TRUE), q_breaks, max(df$date_mid, na.rm = TRUE)))
+  }
+
+  df %>%
+    mutate(time_bin = cut(date_mid, breaks = q_breaks, include.lowest = TRUE, labels = FALSE)) %>%
+    filter(!is.na(time_bin)) %>%
+    group_by(time_bin) %>%
+    summarise(
+      date_mid = median(date_mid, na.rm = TRUE),
+      n = n(),
+      n_christian = sum(y01, na.rm = TRUE),
+      prop_christian = n_christian / n,
+      lower = qbeta(0.025, n_christian + 0.5, n - n_christian + 0.5),
+      upper = qbeta(0.975, n_christian + 0.5, n - n_christian + 0.5),
+      .groups = "drop"
+    )
+}
+
+compute_effect_axis <- function(...) {
+  vals <- c(...)
+  ymin <- min(vals, na.rm = TRUE)
+  ymax <- max(vals, na.rm = TRUE)
+  if (!is.finite(ymin) || !is.finite(ymax) || ymin == ymax) {
+    ymin <- -1; ymax <- 1
+  }
+  pad <- 0.06 * (ymax - ymin)
+  list(ymin = ymin - pad, ymax = ymax + pad)
+}
+
+build_effect_bin_overlay <- function(label_time_bins, effect_limits) {
+  prop_to_effect <- function(p) {
+    effect_limits$ymin + p * (effect_limits$ymax - effect_limits$ymin)
+  }
+  effect_to_prop <- function(y) {
+    (y - effect_limits$ymin) / (effect_limits$ymax - effect_limits$ymin)
+  }
+  list(
+    data = label_time_bins %>%
+      mutate(
+        prop_y  = prop_to_effect(prop_christian),
+        lower_y = prop_to_effect(lower),
+        upper_y = prop_to_effect(upper)
+      ),
+    effect_to_prop = effect_to_prop
+  )
+}
+```
+
+## BERT predictions — logit only
+
+```{r}
+read_bert_predictions <- function(bert_dir) {
+  bert_oof_path <- find_existing_file(
+    path = file.path(bert_dir, "bert_oof_predictions.csv"),
+    dir = bert_dir, pattern = "^bert_oof_predictions.*\\.csv$"
+  )
+  bert_full_path <- find_existing_file(
+    path = file.path(bert_dir, "bert_full_predictions.csv"),
+    dir = bert_dir, pattern = "^bert_full_predictions.*\\.csv$"
+  )
+  oof  <- if (is.na(bert_oof_path))  tibble() else readr::read_csv(bert_oof_path,  show_col_types = FALSE)
+  full <- if (is.na(bert_full_path)) tibble() else readr::read_csv(bert_full_path, show_col_types = FALSE)
+  if (nrow(oof) == 0 && nrow(full) == 0) stop("Could not find BERT prediction files in ", bert_dir)
+
+  # Keep only logit columns (drop margin)
+  oof <- oof %>%
+    select(any_of(c("id", "row_id", "manual_label", "prob_bert", "score_bert_logit"))) %>%
+    rename_with(~ paste0(.x, "_oof"), any_of(c("manual_label", "prob_bert", "score_bert_logit")))
+
+  full <- full %>%
+    select(any_of(c("id", "row_id", "prob_bert", "score_bert_logit"))) %>%
+    rename_with(~ paste0(.x, "_full"), any_of(c("prob_bert", "score_bert_logit")))
+
+  if (nrow(oof) > 0 && nrow(full) > 0) {
+    merge_keys <- intersect(c("id", "row_id"), intersect(names(oof), names(full)))
+    if (length(merge_keys) == 0) stop("No shared join key between BERT OOF and full prediction files")
+    bert <- full_join(full, oof, by = merge_keys)
+  } else {
+    bert <- if (nrow(oof) > 0) oof else full
+  }
+
+  for (nm in c("prob_bert_oof", "prob_bert_full", "score_bert_logit_oof", "score_bert_logit_full")) {
+    if (!(nm %in% names(bert))) bert[[nm]] <- NA_real_
+  }
+
+  bert %>%
+    mutate(
+      prob_bert        = coalesce(prob_bert_oof, prob_bert_full),
+      score_bert_logit = coalesce(score_bert_logit_oof, score_bert_logit_full),
+      bert_prediction_source = case_when(
+        !is.na(score_bert_logit_oof)  ~ "oof",
+        !is.na(score_bert_logit_full) ~ "full",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    select(any_of(c("id", "row_id")), prob_bert, score_bert_logit, bert_prediction_source)
+}
+
+merge_bert_predictions <- function(dat, bert_dir) {
+  bert <- read_bert_predictions(bert_dir)
+  merge_keys <- intersect(c("id", "row_id"), intersect(names(dat), names(bert)))
+  if (length(merge_keys) == 0) stop("No shared join key between audit data and BERT predictions")
+  dat %>% left_join(bert, by = merge_keys)
+}
+
+load_base_data <- function(path, bert_dir) {
+  readr::read_csv(path, show_col_types = FALSE) %>%
+    merge_bert_predictions(bert_dir) %>%
+    mutate(
+      manual_label_raw = as.character(manual_label),
+      manual_label     = clean_label(manual_label),
+      creator          = replace_na(as.character(creator), "Unknown"),
+      prediction_source = if ("prediction_source" %in% names(.)) {
+        factor(as.character(prediction_source), levels = c("cross_fitted_labeled", "full_fit_unlabeled"))
+      } else {
+        factor(NA_character_, levels = c("cross_fitted_labeled", "full_fit_unlabeled"))
+      },
+      date_range_start = as.numeric(date_range_start),
+      date_range_end   = as.numeric(date_range_end),
+      date_mid         = (date_range_start + date_range_end) / 2
+    )
+}
+
+make_labeled_dat <- function(dat) {
+  dat %>%
+    filter(!is.na(manual_label), is.finite(date_mid)) %>%
+    mutate(
+      manual_label = factor(manual_label, levels = c("non_christian", "christian")),
+      y01     = if_else(manual_label == "christian", 1L, 0L),
+      creator = replace_na(creator, "Unknown")
+    )
+}
+
+add_aligned_scores <- function(dat, score_cols, score_labels) {
+  labeled_dat <- make_labeled_dat(dat)
+  orientation_audit <- bind_rows(lapply(score_cols, function(sc) {
+    x <- labeled_dat[[sc]]
+    auc_raw <- fast_auc(x, labeled_dat$y01)
+    m1 <- mean(x[labeled_dat$y01 == 1], na.rm = TRUE)
+    m0 <- mean(x[labeled_dat$y01 == 0], na.rm = TRUE)
+    flip <- if (is.na(auc_raw)) m1 < m0 else auc_raw < 0.5
+    tibble(
+      score = sc,
+      score_label = recode(sc, !!!score_labels),
+      auc_raw = auc_raw, mean_christian = m1, mean_non_christian = m0,
+      flipped = flip,
+      auc_aligned = if_else(is.na(auc_raw), NA_real_, if_else(flip, 1 - auc_raw, auc_raw)),
+      mean_diff_raw = m1 - m0,
+      mean_diff_aligned = if_else(flip, -(m1 - m0), (m1 - m0))
+    )
+  }))
+
+  dat_aligned <- dat
+  for (sc in score_cols) {
+    flip_sc <- orientation_audit %>% filter(score == sc) %>% pull(flipped)
+    dat_aligned[[paste0(sc, "_aligned")]] <- if (isTRUE(flip_sc)) -dat_aligned[[sc]] else dat_aligned[[sc]]
+  }
+  list(dat = dat_aligned, labeled_dat = make_labeled_dat(dat_aligned), orientation_audit = orientation_audit)
+}
+
+make_analysis_df <- function(data, score_col, date_min = -Inf, date_max = Inf, labels = NULL, require_source = FALSE) {
+  cols <- c("id", "row_id", "title", "creator", "date_mid", "manual_label", "prediction_source")
+  cols <- cols[cols %in% names(data)]
+
+  df <- data %>%
+    transmute(!!!rlang::syms(cols), y = .data[[score_col]]) %>%
+    filter(is.finite(y), is.finite(date_mid), date_mid >= date_min, date_mid <= date_max)
+  if (!is.null(labels))   df <- df %>% filter(manual_label %in% labels)
+  if (require_source)     df <- df %>% filter(!is.na(prediction_source))
+
+  df <- df %>%
+    mutate(
+      creator = replace_na(as.character(creator), "Unknown"),
+      manual_label = factor(manual_label, levels = c("non_christian", "christian"))
+    ) %>%
+    arrange(date_mid, creator) %>%
+    mutate(
+      creator     = fct_drop(factor(creator)),
+      creator_idx = as.integer(creator),
+      date_idx    = dense_rank(date_mid)
+    )
+
+  date_center <- mean(df$date_mid, na.rm = TRUE)
+  date_scale  <- sd(df$date_mid, na.rm = TRUE)
+  if (!is.finite(date_scale) || date_scale == 0) date_scale <- 1
+
+  df %>% mutate(
+    date_z = (date_mid - date_center) / date_scale,
+    y01    = if_else(manual_label == "christian", 1L, 0L)
+  )
+}
+```
+
+## INLA formula builders
+
+```{r}
+build_label_forms <- function(df) {
+  forms <- list(
+    label_only         = y ~ 1 + manual_label,
+    date_linear        = y ~ 1 + date_z,
+    date_rw1           = y ~ 1 + f(date_idx, model = "rw1", constr = TRUE, scale.model = TRUE, hyper = rw_hyper),
+    date_rw2           = y ~ 1 + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper),
+    label_date_linear  = y ~ 1 + manual_label + date_z,
+    label_date_rw1     = y ~ 1 + manual_label + f(date_idx, model = "rw1", constr = TRUE, scale.model = TRUE, hyper = rw_hyper),
+    label_date_rw2     = y ~ 1 + manual_label + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper)
+  )
+  if (n_distinct(df$creator_idx) > 1) {
+    forms$label_date_linear_creator <- y ~ 1 + manual_label + date_z + f(creator_idx, model = "iid", hyper = iid_hyper)
+    forms$label_date_rw1_creator    <- y ~ 1 + manual_label + f(date_idx, model = "rw1", constr = TRUE, scale.model = TRUE, hyper = rw_hyper) + f(creator_idx, model = "iid", hyper = iid_hyper)
+    forms$label_date_rw2_creator    <- y ~ 1 + manual_label + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper) + f(creator_idx, model = "iid", hyper = iid_hyper)
+  }
+  forms
+}
+
+build_christian_forms <- function(df) {
+  forms <- list(
+    intercept_only = y ~ 1,
+    date_linear    = y ~ 1 + date_z,
+    date_rw2       = y ~ 1 + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper)
+  )
+  if (n_distinct(df$creator_idx) > 1 && nrow(df) >= 30) {
+    forms$date_rw2_creator <- y ~ 1 + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper) +
+      f(creator_idx, model = "iid", hyper = iid_hyper)
+  }
+  forms
+}
+
+build_window_forms <- function(df) {
+  forms <- list(
+    label_only        = y ~ 1 + manual_label,
+    date_linear       = y ~ 1 + date_z,
+    date_rw2          = y ~ 1 + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper),
+    label_date_linear = y ~ 1 + manual_label + date_z,
+    label_date_rw2    = y ~ 1 + manual_label + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper)
+  )
+  if (n_distinct(df$creator_idx) > 1 && nrow(df) >= 30) {
+    forms$label_date_rw2_creator <- y ~ 1 + manual_label +
+      f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper) +
+      f(creator_idx, model = "iid", hyper = iid_hyper)
+  }
+  forms
+}
+
+build_source_forms <- function(df) {
+  forms <- list(
+    source_only        = y ~ 1 + prediction_source,
+    date_linear_source = y ~ 1 + prediction_source + date_z,
+    date_rw1_source    = y ~ 1 + prediction_source + f(date_idx, model = "rw1", constr = TRUE, scale.model = TRUE, hyper = rw_hyper),
+    date_rw2_source    = y ~ 1 + prediction_source + f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper)
+  )
+  if (n_distinct(df$creator_idx) > 1) {
+    forms$creator_source            <- y ~ 1 + prediction_source + f(creator_idx, model = "iid", hyper = iid_hyper)
+    forms$date_rw2_creator_source   <- y ~ 1 + prediction_source +
+      f(date_idx, model = "rw2", constr = TRUE, scale.model = TRUE, hyper = rw_hyper) +
+      f(creator_idx, model = "iid", hyper = iid_hyper)
+  }
+  forms
+}
+```
+
+## INLA fitting engine
+
+```{r}
+fit_grid_inla <- function(df, formulas, analysis_name, score_name = NA_character_, verbose = FALSE) {
+  fits <- comp_rows <- error_rows <- vector("list", length(formulas))
+  names(fits) <- names(comp_rows) <- names(error_rows) <- names(formulas)
+
+  for (nm in names(formulas)) {
+    fit <- tryCatch(
+      inla(
+        formula = formulas[[nm]], family = "gaussian", data = df,
+        control.compute   = list(waic = TRUE, dic = TRUE, cpo = TRUE, config = TRUE),
+        control.predictor = list(compute = TRUE),
+        control.fixed     = list(prec.intercept = 0.01),
+        control.inla      = list(cmin = 0),
+        num.threads = "1:1", verbose = verbose
+      ),
+      error = function(e) e
+    )
+    fits[[nm]] <- fit
+    if (inherits(fit, "error")) {
+      error_rows[[nm]] <- tibble(analysis = analysis_name, score = score_name, model = nm, error = conditionMessage(fit))
+    } else {
+      comp_rows[[nm]] <- tibble(
+        analysis = analysis_name, score = score_name, model = nm,
+        waic = fit$waic$waic, dic = fit$dic$dic,
+        eff_parameters = fit$waic$p.eff,
+        n = nrow(df), y_mean = mean(df$y, na.rm = TRUE), y_sd = sd(df$y, na.rm = TRUE)
+      )
+    }
+  }
+
+  comparison <- bind_rows(comp_rows)
+  if (nrow(comparison) > 0) {
+    comparison <- comparison %>%
+      arrange(waic) %>%
+      mutate(
+        rank = row_number(),
+        delta_waic  = waic - min(waic, na.rm = TRUE),
+        waic_weight = exp(-0.5 * delta_waic) / sum(exp(-0.5 * delta_waic), na.rm = TRUE)
+      )
+  }
+
+  list(
+    data = df, fits = fits, comparison = comparison, errors = bind_rows(error_rows),
+    date_center = mean(df$date_mid, na.rm = TRUE),
+    date_scale  = { s <- sd(df$date_mid, na.rm = TRUE); if (!is.finite(s) || s == 0) 1 else s }
+  )
+}
+```
+
+## Effect extractors
+
+```{r}
+extract_label_effect <- function(fit_obj, comparison_tbl, score_name, model_name) {
+  fit <- fit_obj$fits[[model_name]]
+  if (inherits(fit, "error") || is.null(fit)) return(NULL)
+  if (!"manual_labelchristian" %in% rownames(fit$summary.fixed)) return(NULL)
+  s <- fit$summary.fixed["manual_labelchristian", , drop = FALSE]
+  y_sd <- comparison_tbl %>% filter(score == score_name, model == model_name) %>% pull(y_sd)
+  if (length(y_sd) == 0 || !is.finite(y_sd)) y_sd <- sd(fit_obj$data$y, na.rm = TRUE)
+  ppos <- NA_real_
+  if (!is.null(fit$marginals.fixed) && "manual_labelchristian" %in% names(fit$marginals.fixed))
+    ppos <- 1 - INLA::inla.pmarginal(0, fit$marginals.fixed$manual_labelchristian)
+  tibble(
+    score = score_name, model = model_name,
+    mean = unname(s[1, "mean"]), lower = unname(s[1, "0.025quant"]), upper = unname(s[1, "0.975quant"]),
+    prob_positive = ppos, y_sd = y_sd,
+    mean_std = mean / y_sd, lower_std = lower / y_sd, upper_std = upper / y_sd
+  )
+}
+
+extract_source_effect <- function(fit_obj, comparison_tbl, score_name, model_name) {
+  fit <- fit_obj$fits[[model_name]]
+  if (inherits(fit, "error") || is.null(fit)) return(NULL)
+  tgt <- "prediction_sourcefull_fit_unlabeled"
+  if (!tgt %in% rownames(fit$summary.fixed)) return(NULL)
+  s <- fit$summary.fixed[tgt, , drop = FALSE]
+  y_sd <- comparison_tbl %>% filter(score == score_name, model == model_name) %>% pull(y_sd)
+  if (length(y_sd) == 0 || !is.finite(y_sd)) y_sd <- sd(fit_obj$data$y, na.rm = TRUE)
+  ppos <- NA_real_
+  if (!is.null(fit$marginals.fixed) && tgt %in% names(fit$marginals.fixed))
+    ppos <- 1 - INLA::inla.pmarginal(0, fit$marginals.fixed[[tgt]])
+  tibble(
+    score = score_name, model = model_name,
+    mean = s[1, "mean"], lower = s[1, "0.025quant"], upper = s[1, "0.975quant"],
+    prob_positive = ppos, y_sd = y_sd,
+    mean_std = mean / y_sd, lower_std = lower / y_sd, upper_std = upper / y_sd
+  )
+}
+
+extract_date_effect_curve <- function(fit_obj, comparison_tbl, model_meta, score_name, model_name) {
+  fit <- fit_obj$fits[[model_name]]
+  if (inherits(fit, "error") || is.null(fit)) return(NULL)
+  meta_row <- model_meta %>% filter(model == model_name)
+  if (nrow(meta_row) == 0) return(NULL)
+  date_fun <- meta_row$date_function[[1]]
+  if (date_fun == "none") return(NULL)
+  y_sd <- comparison_tbl %>% filter(score == score_name, model == model_name) %>% pull(y_sd)
+  if (length(y_sd) == 0 || !is.finite(y_sd)) y_sd <- sd(fit_obj$data$y, na.rm = TRUE)
+
+  if (date_fun == "linear") {
+    if (!"date_z" %in% rownames(fit$summary.fixed)) return(NULL)
+    s <- fit$summary.fixed["date_z", , drop = FALSE]
+    grid <- seq(min(fit_obj$data$date_mid, na.rm = TRUE), max(fit_obj$data$date_mid, na.rm = TRUE), length.out = 250)
+    z <- (grid - fit_obj$date_center) / fit_obj$date_scale
+    lo <- s[1, "0.025quant"] * z; hi <- s[1, "0.975quant"] * z
+    tibble(score = score_name, model = model_name, date_function = date_fun,
+           date_mid = grid, mean = s[1, "mean"] * z, lower = pmin(lo, hi), upper = pmax(lo, hi), y_sd = y_sd) %>%
+      mutate(mean_std = mean / y_sd, lower_std = lower / y_sd, upper_std = upper / y_sd)
+  } else {
+    sr <- as_tibble(as.data.frame(fit$summary.random$date_idx))
+    id_col <- if ("ID" %in% names(sr)) sr$ID else seq_len(nrow(sr))
+    date_map <- fit_obj$data %>% distinct(date_idx, date_mid)
+    tibble(score = score_name, model = model_name, date_function = date_fun,
+           date_idx = as.integer(id_col), mean = sr$mean, lower = sr$`0.025quant`, upper = sr$`0.975quant`, y_sd = y_sd) %>%
+      left_join(date_map, by = "date_idx") %>% arrange(date_mid) %>%
+      mutate(mean_std = mean / y_sd, lower_std = lower / y_sd, upper_std = upper / y_sd) %>%
+      select(score, model, date_function, date_mid, mean, lower, upper, y_sd, mean_std, lower_std, upper_std)
+  }
+}
+
+extract_creator_effects <- function(fit_obj, comparison_tbl, score_name, model_name) {
+  fit <- fit_obj$fits[[model_name]]
+  if (inherits(fit, "error") || is.null(fit)) return(NULL)
+  if (!"creator_idx" %in% names(fit$summary.random)) return(NULL)
+  y_sd <- comparison_tbl %>% filter(score == score_name, model == model_name) %>% pull(y_sd)
+  if (length(y_sd) == 0 || !is.finite(y_sd)) y_sd <- sd(fit_obj$data$y, na.rm = TRUE)
+  sr <- as_tibble(as.data.frame(fit$summary.random$creator_idx))
+  id_col <- if ("ID" %in% names(sr)) sr$ID else seq_len(nrow(sr))
+  creator_map <- fit_obj$data %>% distinct(creator_idx, creator)
+  tibble(score = score_name, model = model_name,
+         creator_idx = as.integer(id_col), mean = sr$mean, lower = sr$`0.025quant`, upper = sr$`0.975quant`, y_sd = y_sd) %>%
+    left_join(creator_map, by = "creator_idx") %>%
+    mutate(mean_std = mean / y_sd, lower_std = lower / y_sd, upper_std = upper / y_sd)
+}
+
+extract_fitted_values <- function(fit_obj, score_name, model_name) {
+  fit <- fit_obj$fits[[model_name]]
+  if (inherits(fit, "error") || is.null(fit)) return(NULL)
+  sv <- fit$summary.fitted.values
+  if (is.null(sv)) return(NULL)
+  as_tibble(as.data.frame(sv)) %>%
+    transmute(mean = mean, lower = `0.025quant`, upper = `0.975quant`) %>%
+    bind_cols(fit_obj$data %>% select(any_of(c("id", "row_id", "title", "creator", "prediction_source", "date_mid", "manual_label", "y")))) %>%
+    mutate(score = score_name, model = model_name, residual = y - mean)
+}
+
+extract_curve_single <- function(fit, df, model_name) {
+  if (inherits(fit, "error")) return(NULL)
+  grid <- tibble(date_mid = seq(min(df$date_mid), max(df$date_mid), length.out = 250))
+  center <- mean(df$date_mid, na.rm = TRUE); scale <- sd(df$date_mid, na.rm = TRUE)
+  if (!is.finite(scale) || scale == 0) scale <- 1
+  grid <- grid %>% mutate(date_z = (date_mid - center) / scale)
+  ir <- fit$summary.fixed["(Intercept)", , drop = FALSE]
+  int_mean <- ir[1, "mean"]; int_lower <- ir[1, "0.025quant"]; int_upper <- ir[1, "0.975quant"]
+
+  if (model_name == "intercept_only") {
+    grid %>% transmute(date_mid, mean = int_mean, lower = int_lower, upper = int_upper)
+  } else if (model_name == "date_linear") {
+    b <- fit$summary.fixed["date_z", , drop = FALSE]
+    grid %>%
+      transmute(date_mid, mean = int_mean + b[1, "mean"] * date_z,
+                lower = int_lower + b[1, "0.025quant"] * date_z,
+                upper = int_upper + b[1, "0.975quant"] * date_z) %>%
+      mutate(lo = pmin(lower, upper), hi = pmax(lower, upper)) %>%
+      transmute(date_mid, mean, lower = lo, upper = hi)
+  } else {
+    sr <- as_tibble(as.data.frame(fit$summary.random$date_idx))
+    id_col <- if ("ID" %in% names(sr)) sr$ID else seq_len(nrow(sr))
+    date_map <- df %>% distinct(date_idx, date_mid)
+    tibble(date_idx = as.integer(id_col), rand_mean = sr$mean, rand_lower = sr$`0.025quant`, rand_upper = sr$`0.975quant`) %>%
+      left_join(date_map, by = "date_idx") %>% arrange(date_mid) %>%
+      transmute(date_mid, mean = int_mean + rand_mean, lower = int_lower + rand_lower, upper = int_upper + rand_upper)
+  }
+}
+
+extract_curve_by_label <- function(fit, df, model_name) {
+  if (inherits(fit, "error")) return(NULL)
+  grid <- tibble(date_mid = seq(min(df$date_mid), max(df$date_mid), length.out = 250))
+  center <- mean(df$date_mid, na.rm = TRUE); scale <- sd(df$date_mid, na.rm = TRUE)
+  if (!is.finite(scale) || scale == 0) scale <- 1
+  grid <- grid %>% mutate(date_z = (date_mid - center) / scale)
+  ir <- fit$summary.fixed["(Intercept)", , drop = FALSE]
+  int_mean <- ir[1, "mean"]; int_lower <- ir[1, "0.025quant"]; int_upper <- ir[1, "0.975quant"]
+  if ("manual_labelchristian" %in% rownames(fit$summary.fixed)) {
+    lab <- fit$summary.fixed["manual_labelchristian", , drop = FALSE]
+    lab_mean <- lab[1, "mean"]; lab_lower <- lab[1, "0.025quant"]; lab_upper <- lab[1, "0.975quant"]
+  } else { lab_mean <- lab_lower <- lab_upper <- 0 }
+
+  if (model_name == "label_only") {
+    bind_rows(
+      grid %>% transmute(manual_label = "non_christian", date_mid, mean = int_mean, lower = int_lower, upper = int_upper),
+      grid %>% transmute(manual_label = "christian", date_mid, mean = int_mean + lab_mean, lower = int_lower + lab_lower, upper = int_upper + lab_upper)
+    )
+  } else if (model_name == "label_date_linear") {
+    b <- fit$summary.fixed["date_z", , drop = FALSE]
+    bind_rows(
+      grid %>% transmute(manual_label = "non_christian", date_mid,
+        mean = int_mean + b[1, "mean"] * date_z, lower = int_lower + b[1, "0.025quant"] * date_z, upper = int_upper + b[1, "0.975quant"] * date_z),
+      grid %>% transmute(manual_label = "christian", date_mid,
+        mean = int_mean + lab_mean + b[1, "mean"] * date_z, lower = int_lower + lab_lower + b[1, "0.025quant"] * date_z, upper = int_upper + lab_upper + b[1, "0.975quant"] * date_z)
+    ) %>% mutate(lo = pmin(lower, upper), hi = pmax(lower, upper)) %>% transmute(manual_label, date_mid, mean, lower = lo, upper = hi)
+  } else {
+    sr <- as_tibble(as.data.frame(fit$summary.random$date_idx))
+    id_col <- if ("ID" %in% names(sr)) sr$ID else seq_len(nrow(sr))
+    date_map <- df %>% distinct(date_idx, date_mid)
+    base_curve <- tibble(date_idx = as.integer(id_col), rand_mean = sr$mean, rand_lower = sr$`0.025quant`, rand_upper = sr$`0.975quant`) %>%
+      left_join(date_map, by = "date_idx") %>% arrange(date_mid)
+    bind_rows(
+      base_curve %>% transmute(manual_label = "non_christian", date_mid, mean = int_mean + rand_mean, lower = int_lower + rand_lower, upper = int_upper + rand_upper),
+      base_curve %>% transmute(manual_label = "christian", date_mid, mean = int_mean + lab_mean + rand_mean, lower = int_lower + lab_lower + rand_lower, upper = int_upper + lab_upper + rand_upper)
+    )
+  }
+}
+```
+
+## Palettes and model metadata
+
+```{r}
+make_palettes <- function() {
+  list(
+    disc       = c("non_christian" = pal_non_christian, "christian" = pal_christian),
+    flip       = c("FALSE" = pal_christian, "TRUE" = pal_accent),
+    comp_label = c("Label over best date-only" = pal_christian, "Creator over best label+date" = pal_accent),
+    comp_source = c("Date over source" = pal_christian, "Creator over date" = pal_accent),
+    label      = c("non_christian" = pal_non_christian, "christian" = pal_christian)
+  )
+}
+
+build_labeled_main_model_meta <- function() {
+  tibble(
+    model = c(
+      "label_only",
+      "date_linear", "date_rw1", "date_rw2",
+      "label_date_linear", "label_date_rw1", "label_date_rw2",
+      "label_date_linear_creator", "label_date_rw1_creator", "label_date_rw2_creator"
+    ),
+    model_pretty = c(
+      "Label only",
+      "Date linear", "Date RW1", "Date RW2",
+      "Label + linear date", "Label + RW1 date", "Label + RW2 date",
+      "Label + linear date + creator", "Label + RW1 date + creator", "Label + RW2 date + creator"
+    ),
+    date_function = c("none", "linear", "rw1", "rw2", "linear", "rw1", "rw2", "linear", "rw1", "rw2"),
+    has_label   = c(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE),
+    has_creator = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE)
+  )
+}
+
+build_full_corpus_model_meta <- function() {
+  tibble(
+    model = c("source_only", "date_linear_source", "date_rw1_source", "date_rw2_source", "creator_source", "date_rw2_creator_source"),
+    model_pretty = c("Source only", "Source + linear date", "Source + RW1 date", "Source + RW2 date", "Source + creator", "Source + RW2 date + creator"),
+    has_source = TRUE,
+    has_date     = c(FALSE, TRUE, TRUE, TRUE, FALSE, TRUE),
+    date_function = c("none", "linear", "rw1", "rw2", "none", "rw2"),
+    has_creator  = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE)
+  )
+}
+```
+
+## Labeled-corpus analysis (all scores)
+
+```{r}
+run_labeled_main_analysis <- function(spec, dat, score_cols, score_labels, palettes) {
+  out_dir   <- file.path(results_path, spec$out_subdir)
+  plot_dir  <- file.path(out_dir, "plots")
+  table_dir <- file.path(out_dir, "tables")
+  fit_dir   <- file.path(out_dir, "fits")
+  ensure_dirs(out_dir, plot_dir, table_dir, fit_dir)
+
+  aligned <- add_aligned_scores(dat, score_cols, score_labels)
+  dat_aligned       <- aligned$dat
+  labeled_dat       <- aligned$labeled_dat
+  orientation_audit <- aligned$orientation_audit
+
+  write_csv(dat_aligned %>% count(manual_label_raw, manual_label, sort = TRUE), file.path(table_dir, "label_audit.csv"))
+  write_csv(orientation_audit, file.path(table_dir, "orientation_audit.csv"))
+
+  aligned_cols <- paste0(score_cols, "_aligned")
+
+  score_dist_plot_data <- bind_rows(
+    labeled_dat %>%
+      select(manual_label, all_of(score_cols)) %>%
+      pivot_longer(cols = all_of(score_cols), names_to = "score", values_to = "value") %>%
+      filter(is.finite(value)) %>% group_by(score) %>% mutate(value_std = safe_standardize(value)) %>% ungroup() %>%
+      mutate(score_label = recode(score, !!!score_labels), orientation = "Raw"),
+    labeled_dat %>%
+      select(manual_label, all_of(aligned_cols)) %>%
+      pivot_longer(cols = all_of(aligned_cols), names_to = "score_aligned", values_to = "value") %>%
+      mutate(score = str_remove(score_aligned, "_aligned$")) %>%
+      filter(is.finite(value)) %>% group_by(score) %>% mutate(value_std = safe_standardize(value)) %>% ungroup() %>%
+      mutate(score_label = recode(score, !!!score_labels), orientation = "Aligned")
+  )
+
+  model_meta   <- build_labeled_main_model_meta()
+  model_levels <- model_meta$model_pretty
+
+  # ── Fit INLA grid for every score ─────────────────────────────────
+  results <- setNames(vector("list", length(score_cols)), score_cols)
+  for (sc in score_cols) {
+    message("Fitting labeled-corpus models for: ", sc)
+    df <- make_analysis_df(dat_aligned, paste0(sc, "_aligned"), labels = c("non_christian", "christian"))
+    results[[sc]] <- fit_grid_inla(df, build_label_forms(df), analysis_name = "labeled_main", score_name = sc)
+  }
+  saveRDS(results, file.path(fit_dir, "all_inla_fits.rds"))
+
+  model_errors <- bind_rows(lapply(results, `[[`, "errors"))
+  write_csv(model_errors, file.path(table_dir, "model_errors.csv"))
+
+  model_comparisons <- bind_rows(lapply(results, `[[`, "comparison")) %>%
+    left_join(model_meta, by = "model") %>%
+    mutate(score_label = recode(score, !!!score_labels), model_pretty = factor(model_pretty, levels = model_levels))
+  write_csv(model_comparisons, file.path(table_dir, "model_comparisons.csv"))
+
+  # ── Diagnosis tables ──────────────────────────────────────────────
+  best_overall         <- pick_best(model_comparisons) %>% select(score, score_label, best_model = model, best_model_pretty = model_pretty, best_waic = waic)
+  second_best          <- model_comparisons %>% arrange(score, waic) %>% group_by(score) %>% slice(2) %>% ungroup() %>% select(score, second_model = model, second_model_pretty = model_pretty, second_waic = waic)
+  best_date_only       <- pick_best(model_comparisons, !has_label & !has_creator & date_function != "none") %>% select(score, best_date_only_model = model, best_date_only_pretty = model_pretty, best_date_only_waic = waic, best_date_only_function = date_function)
+  best_label_no_creator <- pick_best(model_comparisons, has_label & !has_creator) %>% select(score, best_label_model = model, best_label_pretty = model_pretty, best_label_waic = waic, best_label_function = date_function)
+  best_label_creator   <- pick_best(model_comparisons, has_label & has_creator) %>% select(score, best_creator_model = model, best_creator_pretty = model_pretty, best_creator_waic = waic, best_creator_function = date_function)
+
+  score_diagnosis <- best_overall %>%
+    left_join(second_best, by = "score") %>%
+    left_join(best_date_only, by = "score") %>%
+    left_join(best_label_no_creator, by = "score") %>%
+    left_join(best_label_creator, by = "score") %>%
+    left_join(orientation_audit %>% select(score, flipped, auc_raw, auc_aligned), by = "score") %>%
+    mutate(
+      gap_to_second        = second_waic - best_waic,
+      label_gain_vs_date   = best_date_only_waic - best_label_waic,
+      creator_gain_vs_label = best_label_waic - best_creator_waic,
+      gap_support          = waic_strength(gap_to_second),
+      label_gain_support   = waic_strength(label_gain_vs_date),
+      creator_gain_support = waic_strength(creator_gain_vs_label)
+    )
+
+  # ── Extract effects ───────────────────────────────────────────────
+  label_effects_all <- safe_bind_rows(lapply(seq_len(nrow(model_comparisons)), function(i) {
+    if (model_comparisons$has_label[i])
+      extract_label_effect(results[[model_comparisons$score[i]]], model_comparisons, model_comparisons$score[i], model_comparisons$model[i])
+  })) %>%
+    left_join(model_meta, by = "model") %>%
+    mutate(score_label = recode(score, !!!score_labels), model_pretty = factor(model_pretty, levels = model_levels))
+
+  best_by_date_function <- model_comparisons %>%
+    filter(date_function != "none") %>% group_by(score, date_function) %>%
+    slice_min(waic, n = 1, with_ties = FALSE) %>% ungroup() %>%
+    select(score, date_function, model, model_pretty, has_label, has_creator, waic)
+
+  date_effects_best_fn <- safe_bind_rows(lapply(seq_len(nrow(best_by_date_function)), function(i) {
+    extract_date_effect_curve(results[[best_by_date_function$score[i]]], model_comparisons, model_meta, best_by_date_function$score[i], best_by_date_function$model[i])
+  })) %>%
+    left_join(best_by_date_function, by = c("score", "date_function", "model")) %>%
+    mutate(score_label = recode(score, !!!score_labels), date_function = factor(date_function, levels = c("linear", "rw1", "rw2")))
+
+  best_overall_date_enabled <- model_comparisons %>%
+    filter(date_function != "none") %>% group_by(score) %>% slice_min(waic, n = 1, with_ties = FALSE) %>% ungroup() %>%
+    select(score, model, model_pretty, date_function, has_label, has_creator, waic)
+
+  date_effects_best_overall <- safe_bind_rows(lapply(seq_len(nrow(best_overall_date_enabled)), function(i) {
+    extract_date_effect_curve(results[[best_overall_date_enabled$score[i]]], model_comparisons, model_meta, best_overall_date_enabled$score[i], best_overall_date_enabled$model[i])
+  })) %>%
+    left_join(best_overall_date_enabled, by = c("score", "model")) %>%
+    mutate(score_label = recode(score, !!!score_labels))
+
+  creator_best <- best_label_creator %>% select(score, model = best_creator_model)
+  creator_effects_best <- safe_bind_rows(lapply(seq_len(nrow(creator_best)), function(i) {
+    extract_creator_effects(results[[creator_best$score[i]]], model_comparisons, creator_best$score[i], creator_best$model[i])
+  })) %>%
+    left_join(model_meta, by = "model") %>%
+    mutate(score_label = recode(score, !!!score_labels), model_pretty = factor(model_pretty, levels = model_levels))
+
+  creator_extremes <- creator_effects_best %>%
+    group_by(score, score_label) %>% arrange(mean_std, .by_group = TRUE) %>%
+    mutate(rank_low = row_number(), rank_high = row_number(desc(mean_std))) %>%
+    filter(rank_low <= 6 | rank_high <= 6) %>% ungroup() %>% select(-rank_low, -rank_high)
+
+  gain_long <- score_diagnosis %>%
+    select(score, score_label, label_gain_vs_date, creator_gain_vs_label) %>%
+    pivot_longer(cols = c(label_gain_vs_date, creator_gain_vs_label), names_to = "component", values_to = "gain") %>%
+    mutate(component = recode(component, label_gain_vs_date = "Label over best date-only", creator_gain_vs_label = "Creator over best label+date"))
+
+  # ── Save tables ───────────────────────────────────────────────────
+  write_csv(score_diagnosis, file.path(table_dir, "score_diagnosis.csv"))
+  write_csv(label_effects_all, file.path(table_dir, "label_effects_all_models.csv"))
+  write_csv(date_effects_best_fn, file.path(table_dir, "date_effects_best_by_function.csv"))
+  write_csv(date_effects_best_overall, file.path(table_dir, "date_effects_best_overall.csv"))
+  write_csv(creator_effects_best, file.path(table_dir, "creator_effects_best_models.csv"))
+
+  # ── Plotting scaffolding ──────────────────────────────────────────
+  score_order <- unname(score_labels)
+  model_order <- model_levels
+  max_delta   <- max(model_comparisons$delta_waic, na.rm = TRUE)
+  if (!is.finite(max_delta) || max_delta <= 0) max_delta <- 1
+
+  label_time_bins  <- make_label_time_bins(labeled_dat, n_bins = 18)
+  effect_limits    <- compute_effect_axis(date_effects_best_fn$lower_std, date_effects_best_overall$lower_std,
+                                          date_effects_best_fn$upper_std, date_effects_best_overall$upper_std)
+  overlay          <- build_effect_bin_overlay(label_time_bins, effect_limits)
+  label_time_bins_plot <- overlay$data
+  effect_to_prop       <- overlay$effect_to_prop
+
+  # ── Figures ───────────────────────────────────────────────────────
+  p_orientation <- score_dist_plot_data %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           manual_label = factor(manual_label, levels = c("non_christian", "christian"))) %>%
+    ggplot(aes(x = manual_label, y = value_std, fill = manual_label)) +
+    geom_violin(width = 0.88, alpha = 0.82, linewidth = 0.2, trim = FALSE, color = NA) +
+    geom_boxplot(width = 0.12, outlier.shape = NA, linewidth = 0.25, fill = "white", color = "grey20") +
+    facet_grid(orientation ~ score_label, scales = "free_y") +
+    scale_fill_manual(values = palettes$disc) +
+    scale_x_discrete(labels = c("non_christian" = "Non-Chr.", "christian" = "Christian")) +
+    labs(x = NULL, y = "Standardised logit score") +
+    theme_fig() + theme(legend.position = "none")
+
+  p_auc <- orientation_audit %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order))) %>%
+    ggplot(aes(x = auc_aligned, y = score_label, color = factor(flipped))) +
+    geom_vline(xintercept = 0.5, linewidth = 0.3, color = "grey65") +
+    geom_segment(aes(x = 0.5, xend = auc_aligned, yend = score_label), linewidth = 1.1, alpha = 0.9) +
+    geom_point(size = 3.0) +
+    scale_color_manual(values = palettes$flip) +
+    scale_x_continuous(breaks = c(0.5, 0.7, 0.9, 1.0), limits = c(0.48, 1.0)) +
+    labs(x = "ROC-AUC (aligned)", y = NULL) +
+    theme_fig()
+
+  p_rank <- model_comparisons %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           model_pretty = factor(model_pretty, levels = rev(model_order))) %>%
+    ggplot(aes(x = delta_waic, y = model_pretty, fill = waic_weight)) +
+    geom_col(width = 0.68) +
+    geom_text(aes(label = sprintf("%.1f", delta_waic)), hjust = -0.12, size = 2.8, color = pal_axis) +
+    facet_wrap(~ score_label, scales = "free_y", ncol = 2) +
+    scale_fill_gradient(low = "#DCEAF4", high = pal_christian) +
+    coord_cartesian(xlim = c(0, max_delta * 1.08), clip = "off") +
+    labs(x = expression(Delta * WAIC), y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none",
+                        axis.text.y = element_text(size = 8.5))
+
+  p_heat <- model_comparisons %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order)),
+           model_pretty = factor(model_pretty, levels = model_order)) %>%
+    ggplot(aes(x = model_pretty, y = score_label, fill = delta_waic)) +
+    geom_tile(color = "white", linewidth = 0.5) +
+    geom_text(aes(label = sprintf("%.1f", delta_waic)), size = 2.6, color = "white") +
+    scale_fill_gradient(low = pal_christian, high = "#DCEAF4", trans = "reverse") +
+    labs(x = NULL, y = NULL) +
+    theme_fig() + theme(panel.grid = element_blank(),
+                        axis.text.x = element_text(angle = 40, hjust = 1, vjust = 1, size = 8.5),
+                        legend.position = "none")
+
+  p_gains <- gain_long %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order))) %>%
+    ggplot(aes(x = gain, y = score_label, color = component)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_segment(aes(x = 0, xend = gain, yend = score_label), linewidth = 1.1, alpha = 0.9) +
+    geom_point(size = 3.0) +
+    facet_wrap(~ component, ncol = 1, scales = "free_x") +
+    scale_color_manual(values = palettes$comp_label) +
+    labs(x = expression(Delta * WAIC), y = NULL) +
+    theme_fig() + theme(legend.position = "none")
+
+  p_label_std <- label_effects_all %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           model_pretty = factor(model_pretty, levels = rev(model_order))) %>%
+    ggplot(aes(x = mean_std, y = model_pretty, xmin = lower_std, xmax = upper_std, color = prob_positive)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_linerange(linewidth = 0.95, alpha = 0.95) +
+    geom_point(size = 2.6) +
+    facet_wrap(~ score_label, scales = "free_y", ncol = 2) +
+    scale_color_gradient(low = "#DCEAF4", high = pal_christian) +
+    labs(x = "Christian-label effect / SD(logit)", y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none",
+                        axis.text.y = element_text(size = 8.5))
+
+  p_label_raw <- label_effects_all %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           model_pretty = factor(model_pretty, levels = rev(model_order))) %>%
+    ggplot(aes(x = mean, y = model_pretty, xmin = lower, xmax = upper, color = prob_positive)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_linerange(linewidth = 0.95, alpha = 0.95) +
+    geom_point(size = 2.6) +
+    facet_wrap(~ score_label, scales = "free_y", ncol = 2) +
+    scale_color_gradient(low = "#DCEAF4", high = pal_christian) +
+    labs(x = "Christian-label effect (logit units)", y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none",
+                        axis.text.y = element_text(size = 8.5))
+
+  p_date_by_score <- date_effects_best_fn %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           curve_label = case_when(has_creator ~ paste0(toupper(as.character(date_function)), " + creator"),
+                                   has_label   ~ paste0(toupper(as.character(date_function)), " + label"),
+                                   TRUE        ~ toupper(as.character(date_function)))) %>%
+    ggplot(aes(x = date_mid, y = mean_std, color = curve_label, fill = curve_label)) +
+    geom_ribbon(data = label_time_bins_plot, aes(x = date_mid, ymin = lower_y, ymax = upper_y), inherit.aes = FALSE, fill = "grey40", alpha = 0.08) +
+    geom_line(data = label_time_bins_plot, aes(x = date_mid, y = prop_y), inherit.aes = FALSE, color = "grey20", linewidth = 0.8, linetype = "22") +
+    geom_point(data = label_time_bins_plot, aes(x = date_mid, y = prop_y, size = n), inherit.aes = FALSE, shape = 21, stroke = 0.3, fill = "white", color = "grey20") +
+    geom_hline(yintercept = 0, linewidth = 0.25, color = "grey70") +
+    geom_ribbon(aes(ymin = lower_std, ymax = upper_std), alpha = 0.10, linewidth = 0) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ score_label, ncol = 2) +
+    scale_x_continuous(breaks = nice_x_breaks) +
+    scale_y_continuous(limits = c(effect_limits$ymin, effect_limits$ymax), name = "Temporal effect / SD(logit)",
+      sec.axis = sec_axis(~ effect_to_prop(.), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = scales::label_percent(accuracy = 1), name = "Observed Christian share")) +
+    scale_size_continuous(range = c(1.5, 3.6), guide = "none") +
+    labs(x = "Date (CE)", color = NULL, fill = NULL) +
+    theme_fig() + theme(legend.position = "bottom")
+
+  p_date_by_function <- date_effects_best_fn %>%
+    mutate(date_function = factor(date_function, levels = c("linear", "rw1", "rw2")),
+           score_label = factor(score_label, levels = score_order)) %>%
+    ggplot(aes(x = date_mid, y = mean_std, color = score_label, fill = score_label)) +
+    geom_ribbon(data = label_time_bins_plot, aes(x = date_mid, ymin = lower_y, ymax = upper_y), inherit.aes = FALSE, fill = "grey40", alpha = 0.08) +
+    geom_line(data = label_time_bins_plot, aes(x = date_mid, y = prop_y), inherit.aes = FALSE, color = "grey20", linewidth = 0.8, linetype = "22") +
+    geom_point(data = label_time_bins_plot, aes(x = date_mid, y = prop_y, size = n), inherit.aes = FALSE, shape = 21, stroke = 0.3, fill = "white", color = "grey20") +
+    geom_hline(yintercept = 0, linewidth = 0.25, color = "grey70") +
+    geom_ribbon(aes(ymin = lower_std, ymax = upper_std), alpha = 0.06, linewidth = 0) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ date_function, ncol = 1) +
+    scale_x_continuous(breaks = nice_x_breaks) +
+    scale_y_continuous(limits = c(effect_limits$ymin, effect_limits$ymax), name = "Temporal effect / SD(logit)",
+      sec.axis = sec_axis(~ effect_to_prop(.), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = scales::label_percent(accuracy = 1), name = "Observed Christian share")) +
+    scale_size_continuous(range = c(1.5, 3.6), guide = "none") +
+    labs(x = "Date (CE)", color = NULL, fill = NULL) +
+    theme_fig() + theme(legend.position = "bottom")
+
+  p_best_date_overlay <- date_effects_best_overall %>%
+    mutate(score_label = factor(score_label, levels = score_order)) %>%
+    ggplot(aes(x = date_mid, y = mean_std, color = score_label, fill = score_label)) +
+    geom_ribbon(data = label_time_bins_plot, aes(x = date_mid, ymin = lower_y, ymax = upper_y), inherit.aes = FALSE, fill = "grey40", alpha = 0.08) +
+    geom_line(data = label_time_bins_plot, aes(x = date_mid, y = prop_y), inherit.aes = FALSE, color = "grey20", linewidth = 0.85, linetype = "22") +
+    geom_point(data = label_time_bins_plot, aes(x = date_mid, y = prop_y, size = n), inherit.aes = FALSE, shape = 21, stroke = 0.3, fill = "white", color = "grey20") +
+    geom_hline(yintercept = 0, linewidth = 0.25, color = "grey70") +
+    geom_ribbon(aes(ymin = lower_std, ymax = upper_std), alpha = 0.08, linewidth = 0) +
+    geom_line(linewidth = 0.95) +
+    scale_x_continuous(breaks = nice_x_breaks) +
+    scale_y_continuous(limits = c(effect_limits$ymin, effect_limits$ymax), name = "Temporal effect / SD(logit)",
+      sec.axis = sec_axis(~ effect_to_prop(.), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = scales::label_percent(accuracy = 1), name = "Observed Christian share")) +
+    scale_size_continuous(range = c(1.6, 3.8), guide = "none") +
+    labs(x = "Date (CE)", color = NULL, fill = NULL) +
+    theme_fig() + theme(legend.position = "bottom")
+
+  p_creator <- creator_extremes %>%
+    mutate(score_label = factor(score_label, levels = score_order)) %>%
+    group_by(score) %>% mutate(creator = fct_reorder(creator, mean_std)) %>% ungroup() %>%
+    ggplot(aes(x = mean_std, y = creator)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_linerange(aes(xmin = lower_std, xmax = upper_std), linewidth = 0.9, color = "grey55") +
+    geom_point(size = 2.7, color = pal_christian) +
+    facet_wrap(~ score_label, scales = "free_y", ncol = 2) +
+    labs(x = "Creator effect / SD(logit)", y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none",
+                        axis.text.y = element_text(size = 8))
+
+  p_model_path <- score_diagnosis %>%
+    transmute(score_label, `Date only` = best_date_only_waic, `Label + date` = best_label_waic, `+ Creator` = best_creator_waic) %>%
+    pivot_longer(-score_label, names_to = "stage", values_to = "waic") %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           stage = factor(stage, levels = c("Date only", "Label + date", "+ Creator"))) %>%
+    ggplot(aes(x = stage, y = waic, group = score_label, color = score_label)) +
+    geom_line(linewidth = 0.95, alpha = 0.9) + geom_point(size = 2.6) +
+    labs(x = NULL, y = "WAIC") +
+    theme_fig() + theme(legend.position = "bottom", axis.text.x = element_text(size = 9.5))
+
+  p_label_vs_gain <- score_diagnosis %>%
+    ggplot(aes(x = label_gain_vs_date, y = creator_gain_vs_label, label = score_label)) +
+    geom_hline(yintercept = 0, linewidth = 0.25, color = "grey75") +
+    geom_vline(xintercept = 0, linewidth = 0.25, color = "grey75") +
+    geom_point(size = 3.0, color = pal_christian) +
+    ggrepel::geom_text_repel(size = 3.1, color = pal_axis, seed = 42, max.overlaps = 20) +
+    labs(x = expression(Delta * WAIC ~ "(gain from label)"), y = expression(Delta * WAIC ~ "(gain from creator)")) +
+    theme_fig()
+
+  # ── Save all plots ────────────────────────────────────────────────
+  plot_list <- list(
+    list(plot = p_orientation,       name = "01_orientation_raw_vs_aligned",          width = 10.8, height = 6.8),
+    list(plot = p_auc,               name = "02_orientation_auc_audit",               width = 7.0,  height = 4.8),
+    list(plot = p_rank,              name = "03_waic_rank_bars",                      width = 11.2, height = 8.8),
+    list(plot = p_heat,              name = "04_waic_heatmap",                        width = 11.4, height = 5.0),
+    list(plot = p_gains,             name = "05_component_gains",                     width = 8.6,  height = 6.8),
+    list(plot = p_label_std,         name = "06_label_effects_standardised",          width = 11.0, height = 9.2),
+    list(plot = p_label_raw,         name = "07_label_effects_raw",                   width = 11.0, height = 9.2),
+    list(plot = p_date_by_score,     name = "08_date_function_overlay_by_score",      width = 10.0, height = 7.2),
+    list(plot = p_date_by_function,  name = "09_score_overlay_by_date_function",      width = 8.8,  height = 8.8),
+    list(plot = p_best_date_overlay, name = "10_best_overall_date_overlay",           width = 8.8,  height = 5.4),
+    list(plot = p_creator,           name = "11_creator_effect_extremes",             width = 11.0, height = 8.8),
+    list(plot = p_model_path,        name = "12_model_path",                          width = 7.2,  height = 4.8),
+    list(plot = p_label_vs_gain,     name = "13_label_vs_creator_gain",              width = 6.6,  height = 5.2)
+  )
+  purrr::walk(plot_list, ~ { print(.x$plot); save_plot(.x$plot, .x$name, plot_dir, .x$width, .x$height) })
+
+  # ── Summary text ──────────────────────────────────────────────────
+  writeLines(c("Model ranking summary", "",
+    paste0(score_diagnosis$score_label, ": flipped=", score_diagnosis$flipped,
+           "; best=", score_diagnosis$best_model_pretty, " (WAIC ", round(score_diagnosis$best_waic, 2), ")",
+           "; second=", score_diagnosis$second_model_pretty,
+           "; gap=", round(score_diagnosis$gap_to_second, 2), " [", score_diagnosis$gap_support, "]",
+           "; label gain=", round(score_diagnosis$label_gain_vs_date, 2), " [", score_diagnosis$label_gain_support, "]",
+           "; creator gain=", round(score_diagnosis$creator_gain_vs_label, 2), " [", score_diagnosis$creator_gain_support, "]")
+  ), file.path(out_dir, "analysis_summary.txt"))
+
+  list(dat = dat_aligned, labeled_dat = labeled_dat, results = results,
+       model_comparisons = model_comparisons, score_labels = score_labels, out_dir = out_dir)
+}
+```
+
+## Targeted sensitivity analysis (elastic net only)
+
+```{r}
+run_targeted_analysis <- function(spec, dat, palettes) {
+  out_dir   <- file.path(results_path, spec$out_subdir)
+  plot_dir  <- file.path(out_dir, "plots")
+  table_dir <- file.path(out_dir, "tables")
+  fit_dir   <- file.path(out_dir, "fits")
+  ensure_dirs(out_dir, plot_dir, table_dir, fit_dir)
+
+  # Input column still named "ridge"; display label is "Elastic net"
+  elastic_net_score_col <- if ("score_ridge_logit_aligned" %in% names(dat)) "score_ridge_logit_aligned" else "score_ridge_logit"
+  if (!(elastic_net_score_col %in% names(dat))) stop("Could not find the elastic-net logit score column in `dat`.")
+  target_score_col   <- elastic_net_score_col
+  target_score_label <- "Elastic net"
+
+  dataset_specs <- list(
+    within_christian = list(
+      make_df      = function(x) make_analysis_df(x, score_col = target_score_col, labels = "christian"),
+      build_forms  = build_christian_forms,
+      curve_type   = "single",
+      count_writer = function(df) df %>% summarise(n = n(), n_creators = n_distinct(creator), min_date = min(date_mid, na.rm = TRUE), max_date = max(date_mid, na.rm = TRUE)),
+      count_file   = "christian_subset_counts.csv"
+    ),
+    window_150_350 = list(
+      make_df      = function(x) make_analysis_df(x, score_col = target_score_col, date_min = 150, date_max = 350, labels = c("non_christian", "christian")),
+      build_forms  = build_window_forms,
+      curve_type   = "by_label",
+      count_writer = function(df) df %>% count(manual_label, name = "n") %>% mutate(n_total = nrow(df), n_creators = n_distinct(df$creator), min_date = min(df$date_mid, na.rm = TRUE), max_date = max(df$date_mid, na.rm = TRUE)),
+      count_file   = "window_150_350_counts.csv"
+    )
+  )
+
+  fits_by_dataset <- purrr::imap(dataset_specs, function(ds, nm) {
+    df <- ds$make_df(dat)
+    write_csv(ds$count_writer(df), file.path(table_dir, ds$count_file))
+    fit <- fit_grid_inla(df, ds$build_forms(df), analysis_name = nm, score_name = target_score_col)
+    saveRDS(fit, file.path(fit_dir, paste0(nm, "_target_fits.rds")))
+    fit
+  })
+
+  sens_comparison <- bind_rows(lapply(fits_by_dataset, `[[`, "comparison"))
+  write_csv(sens_comparison, file.path(table_dir, "targeted_model_comparisons.csv"))
+  write_csv(bind_rows(lapply(fits_by_dataset, `[[`, "errors")), file.path(table_dir, "targeted_model_errors.csv"))
+
+  christian_fit <- fits_by_dataset$within_christian;  christian_df <- christian_fit$data
+  window_fit    <- fits_by_dataset$window_150_350;    window_df    <- window_fit$data
+
+  christian_best_main  <- christian_fit$comparison %>% slice_min(waic, n = 1, with_ties = FALSE)
+  window_best_label_main <- window_fit$comparison %>% filter(str_detect(model, "^label")) %>% slice_min(waic, n = 1, with_ties = FALSE)
+
+  targeted_summary <- bind_rows(
+    christian_best_main %>% transmute(analysis = "within_christian", best_model = model, best_waic = waic,
+      second_waic = christian_fit$comparison %>% arrange(waic) %>% slice(2) %>% pull(waic), delta_waic = second_waic - best_waic),
+    window_best_label_main %>% transmute(analysis = "window_150_350", best_model = model, best_waic = waic,
+      date_only_waic = window_fit$comparison %>% filter(model %in% c("date_linear", "date_rw2")) %>% slice_min(waic, n = 1, with_ties = FALSE) %>% pull(waic),
+      delta_waic = date_only_waic - best_waic)
+  )
+  write_csv(targeted_summary, file.path(table_dir, "targeted_summary.csv"))
+
+  window_label_effect <- {
+    fit <- window_fit$fits[[window_best_label_main$model[1]]]
+    if (!inherits(fit, "error") && "manual_labelchristian" %in% rownames(fit$summary.fixed)) {
+      s <- fit$summary.fixed["manual_labelchristian", , drop = FALSE]
+      tibble(model = window_best_label_main$model[1], mean = s[1, "mean"], lower = s[1, "0.025quant"], upper = s[1, "0.975quant"],
+        prob_positive = if (!is.null(fit$marginals.fixed) && "manual_labelchristian" %in% names(fit$marginals.fixed)) 1 - INLA::inla.pmarginal(0, fit$marginals.fixed$manual_labelchristian) else NA_real_,
+        y_sd = sd(window_df$y, na.rm = TRUE)) %>% mutate(mean_std = mean / y_sd, lower_std = lower / y_sd, upper_std = upper / y_sd)
+    } else tibble()
+  }
+  write_csv(window_label_effect, file.path(table_dir, "window_label_effect.csv"))
+
+  christian_curve <- extract_curve_single(christian_fit$fits[[christian_best_main$model[1]]], christian_df, christian_best_main$model[1])
+  window_curve    <- extract_curve_by_label(window_fit$fits[[window_best_label_main$model[1]]], window_df, window_best_label_main$model[1])
+  christian_bins  <- make_bin_means(christian_df, n_bins = 14, by_label = FALSE)
+  window_bins     <- make_bin_means(window_df, n_bins = 10, by_label = TRUE)
+
+  write_csv(christian_curve, file.path(table_dir, "within_christian_best_curve.csv"))
+  write_csv(window_curve, file.path(table_dir, "window_best_label_date_curve.csv"))
+
+  pad <- function(x, f = 0.06) { r <- range(x, na.rm = TRUE); d <- diff(r); r + c(-f * d, f * d) }
+  chr_ylim <- pad(c(christian_df$y, christian_curve$lower, christian_curve$upper))
+  win_ylim <- pad(c(window_df$y, window_curve$lower, window_curve$upper))
+
+  p_christian_curve <- ggplot() +
+    geom_point(data = christian_df, aes(x = date_mid, y = y), alpha = 0.25, size = 1.4, stroke = 0, color = pal_christian) +
+    geom_ribbon(data = christian_curve, aes(x = date_mid, ymin = lower, ymax = upper), fill = pal_christian, alpha = 0.12) +
+    geom_line(data = christian_curve, aes(x = date_mid, y = mean), color = pal_christian, linewidth = 1.1) +
+    geom_errorbar(data = christian_bins, aes(x = date_mid, ymin = lower, ymax = upper), width = 0, linewidth = 0.5, color = "grey20") +
+    geom_point(data = christian_bins, aes(x = date_mid, y = mean_y, size = n), shape = 21, fill = "white", color = "grey15", stroke = 0.35) +
+    scale_size_continuous(range = c(1.5, 4.0), guide = "none") +
+    scale_x_continuous(breaks = scales::breaks_extended(n = 6)) +
+    coord_cartesian(ylim = chr_ylim) +
+    labs(x = "Date (CE)", y = paste("Aligned", target_score_label, "logit")) +
+    theme_fig() + theme(legend.position = "none")
+
+  p_christian_waic <- christian_fit$comparison %>%
+    mutate(model = factor(model, levels = rev(c("intercept_only", "date_linear", "date_rw2", "date_rw2_creator")))) %>%
+    ggplot(aes(x = delta_waic, y = model, fill = waic_weight)) +
+    geom_col(width = 0.68) +
+    geom_text(aes(label = sprintf("%.1f", delta_waic)), hjust = -0.12, size = 2.8, color = pal_axis) +
+    scale_fill_gradient(low = "#DCEAF4", high = pal_christian) +
+    coord_cartesian(xlim = c(0, max(christian_fit$comparison$delta_waic, na.rm = TRUE) * 1.08 + 0.01), clip = "off") +
+    labs(x = expression(Delta * WAIC), y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none")
+
+  p_window_curve <- ggplot() +
+    geom_point(data = window_df, aes(x = date_mid, y = y, color = manual_label), alpha = 0.25, size = 1.4, stroke = 0) +
+    geom_ribbon(data = window_curve, aes(x = date_mid, ymin = lower, ymax = upper, fill = manual_label), alpha = 0.12) +
+    geom_line(data = window_curve, aes(x = date_mid, y = mean, color = manual_label), linewidth = 1.1) +
+    geom_errorbar(data = window_bins, aes(x = date_mid, ymin = lower, ymax = upper, color = manual_label), width = 0, linewidth = 0.45, alpha = 0.7) +
+    geom_point(data = window_bins, aes(x = date_mid, y = mean_y, fill = manual_label, size = n), shape = 21, color = "grey15", stroke = 0.3) +
+    scale_color_manual(values = palettes$label) + scale_fill_manual(values = palettes$label) +
+    scale_size_continuous(range = c(1.5, 4.0), guide = "none") +
+    scale_x_continuous(breaks = scales::breaks_extended(n = 6)) +
+    coord_cartesian(ylim = win_ylim) +
+    labs(x = "Date (CE)", y = paste("Aligned", target_score_label, "logit")) +
+    theme_fig() + theme(legend.position = "bottom")
+
+  p_window_waic <- window_fit$comparison %>%
+    mutate(model = factor(model, levels = rev(c("label_only", "date_linear", "date_rw2", "label_date_linear", "label_date_rw2", "label_date_rw2_creator")))) %>%
+    ggplot(aes(x = delta_waic, y = model, fill = waic_weight)) +
+    geom_col(width = 0.68) +
+    geom_text(aes(label = sprintf("%.1f", delta_waic)), hjust = -0.12, size = 2.8, color = pal_axis) +
+    scale_fill_gradient(low = "#DCEAF4", high = pal_christian) +
+    coord_cartesian(xlim = c(0, max(window_fit$comparison$delta_waic, na.rm = TRUE) * 1.08 + 0.01), clip = "off") +
+    labs(x = expression(Delta * WAIC), y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none")
+
+  p_window_label_effect <- window_label_effect %>%
+    ggplot(aes(x = mean_std, y = 1, xmin = lower_std, xmax = upper_std)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey75") +
+    geom_linerange(linewidth = 1.1, color = pal_christian) + geom_point(size = 3.0, color = pal_christian) +
+    scale_y_continuous(NULL, breaks = NULL) +
+    labs(x = "Christian-label effect / SD(logit)", y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank())
+
+  p_window_gain <- targeted_summary %>%
+    filter(analysis == "window_150_350") %>%
+    ggplot(aes(x = delta_waic, y = 1)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey75") +
+    geom_segment(aes(x = 0, xend = delta_waic, yend = 1), linewidth = 1.1, color = pal_christian) +
+    geom_point(size = 3.0, color = pal_christian) +
+    scale_y_continuous(NULL, breaks = NULL) +
+    labs(x = expression(Delta * WAIC ~ "(label gain)"), y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank())
+
+  plot_list <- list(
+    list(plot = p_christian_curve, name = "01_within_christian_temporal_curve", width = 8.6, height = 5.4),
+    list(plot = p_christian_waic,  name = "02_within_christian_model_comparison", width = 7.2, height = 4.6),
+    list(plot = p_window_curve,    name = "03_window_150_350_label_date_curves", width = 8.8, height = 5.4),
+    list(plot = p_window_waic,     name = "04_window_150_350_model_comparison", width = 7.4, height = 5.0),
+    list(plot = p_window_label_effect, name = "05_window_150_350_label_effect", width = 5.4, height = 2.8),
+    list(plot = p_window_gain,     name = "06_window_150_350_label_gain", width = 5.4, height = 2.8)
+  )
+  purrr::walk(plot_list, ~ { print(.x$plot); save_plot(.x$plot, .x$name, plot_dir, .x$width, .x$height) })
+  invisible(list(out_dir = out_dir, target_score_col = target_score_col))
+}
+```
+
+## Full-corpus analysis — now with all labeled-corpus figure types
+
+```{r}
+run_full_corpus_analysis <- function(spec, dat, score_cols, palettes) {
+  out_dir   <- file.path(results_path, spec$out_subdir)
+  plot_dir  <- file.path(out_dir, "plots")
+  table_dir <- file.path(out_dir, "tables")
+  fit_dir   <- file.path(out_dir, "fits")
+  ensure_dirs(out_dir, plot_dir, table_dir, fit_dir)
+
+  all_score_cols <- names(dat)[str_detect(names(dat), "^score_") & str_detect(names(dat), "_logit$")]
+  score_labels   <- set_names(map_chr(all_score_cols, pretty_score_general), all_score_cols)
+
+  aligned <- add_aligned_scores(dat, all_score_cols, score_labels)
+  dat_aligned       <- aligned$dat
+  labeled_dat       <- aligned$labeled_dat
+  orientation_audit <- aligned$orientation_audit
+
+  write_csv(dat_aligned %>% count(manual_label_raw, manual_label, sort = TRUE), file.path(table_dir, "label_audit.csv"))
+  write_csv(dat_aligned %>% count(prediction_source), file.path(table_dir, "prediction_source_audit.csv"))
+  write_csv(orientation_audit, file.path(table_dir, "orientation_audit.csv"))
+
+  aligned_cols <- paste0(all_score_cols, "_aligned")
+
+  score_dist_plot_data <- bind_rows(
+    labeled_dat %>%
+      select(manual_label, all_of(all_score_cols)) %>%
+      pivot_longer(cols = all_of(all_score_cols), names_to = "score", values_to = "value") %>%
+      filter(is.finite(value)) %>% group_by(score) %>% mutate(value_std = safe_standardize(value)) %>% ungroup() %>%
+      mutate(score_label = recode(score, !!!score_labels), orientation = "Raw"),
+    labeled_dat %>%
+      select(manual_label, all_of(aligned_cols)) %>%
+      pivot_longer(cols = all_of(aligned_cols), names_to = "score_aligned", values_to = "value") %>%
+      mutate(score = str_remove(score_aligned, "_aligned$")) %>%
+      filter(is.finite(value)) %>% group_by(score) %>% mutate(value_std = safe_standardize(value)) %>% ungroup() %>%
+      mutate(score_label = recode(score, !!!score_labels), orientation = "Aligned")
+  )
+
+  model_meta   <- build_full_corpus_model_meta()
+  model_order  <- model_meta$model_pretty
+
+  # ── Fit INLA grid for every score ─────────────────────────────────
+  results <- setNames(vector("list", length(all_score_cols)), all_score_cols)
+  for (sc in all_score_cols) {
+    message("Fitting full-corpus models for: ", sc)
+    df <- make_analysis_df(dat_aligned, paste0(sc, "_aligned"), require_source = TRUE)
+    results[[sc]] <- fit_grid_inla(df, build_source_forms(df), analysis_name = "full_corpus", score_name = sc)
+  }
+  saveRDS(results, file.path(fit_dir, "all_full_corpus_inla_fits.rds"))
+
+  model_errors <- bind_rows(lapply(results, `[[`, "errors"))
+  write_csv(model_errors, file.path(table_dir, "model_errors.csv"))
+
+  model_comparisons <- bind_rows(lapply(results, `[[`, "comparison")) %>%
+    left_join(model_meta, by = "model") %>%
+    mutate(score_label = recode(score, !!!score_labels), model_pretty = factor(model_pretty, levels = model_order))
+  write_csv(model_comparisons, file.path(table_dir, "model_comparisons.csv"))
+
+  # ── Main model selection ──────────────────────────────────────────
+  choose_main_model <- function(score_name) {
+    comp <- results[[score_name]]$comparison
+    pref <- c("date_rw2_creator_source", "date_rw2_source", "creator_source", "date_linear_source", "source_only")
+    hit  <- pref[pref %in% comp$model]
+    if (length(hit) == 0) return(NA_character_)
+    hit[1]
+  }
+
+  main_models <- tibble(score = all_score_cols) %>%
+    mutate(main_model = map_chr(score, choose_main_model)) %>%
+    left_join(model_meta %>% select(model, model_pretty, date_function, has_creator), by = c("main_model" = "model")) %>%
+    rename(main_model_pretty = model_pretty) %>%
+    left_join(model_comparisons %>% select(score, model, waic, dic, y_sd) %>% rename(main_model = model, main_waic = waic, main_dic = dic), by = c("score", "main_model")) %>%
+    mutate(score_label = recode(score, !!!score_labels))
+  write_csv(main_models, file.path(table_dir, "main_models.csv"))
+
+  best_overall   <- pick_best(model_comparisons) %>% select(score, score_label, best_model = model, best_model_pretty = model_pretty, best_waic = waic)
+  source_only_tbl <- pick_best(model_comparisons, model == "source_only") %>% select(score, source_only_waic = waic)
+  best_date_tbl  <- pick_best(model_comparisons, has_date & !has_creator) %>% select(score, best_date_model = model, best_date_pretty = model_pretty, best_date_waic = waic)
+  best_creator_tbl <- pick_best(model_comparisons, has_creator) %>% select(score, best_creator_model = model, best_creator_pretty = model_pretty, best_creator_waic = waic)
+
+  score_diagnosis <- best_overall %>%
+    left_join(source_only_tbl, by = "score") %>% left_join(best_date_tbl, by = "score") %>% left_join(best_creator_tbl, by = "score") %>%
+    left_join(orientation_audit %>% select(score, flipped, auc_raw, auc_aligned), by = "score") %>%
+    mutate(
+      gain_date_vs_source  = source_only_waic - best_date_waic,
+      gain_creator_vs_date = best_date_waic - best_creator_waic,
+      gain_date_support    = waic_strength(gain_date_vs_source),
+      gain_creator_support = waic_strength(gain_creator_vs_date)
+    )
+  write_csv(score_diagnosis, file.path(table_dir, "score_diagnosis.csv"))
+
+  # ── Extract effects from main models ──────────────────────────────
+  source_effects_main <- safe_bind_rows(lapply(seq_len(nrow(main_models)), function(i) {
+    extract_source_effect(results[[main_models$score[i]]], model_comparisons, main_models$score[i], main_models$main_model[i])
+  })) %>% left_join(main_models %>% select(score, score_label, main_model, main_model_pretty), by = "score")
+
+  date_curves_main <- safe_bind_rows(lapply(seq_len(nrow(main_models)), function(i) {
+    extract_date_effect_curve(results[[main_models$score[i]]], model_comparisons, model_meta, main_models$score[i], main_models$main_model[i])
+  })) %>% left_join(main_models %>% select(score, score_label, main_model, main_model_pretty), by = "score")
+
+  creator_effects_main <- safe_bind_rows(lapply(seq_len(nrow(main_models)), function(i) {
+    extract_creator_effects(results[[main_models$score[i]]], model_comparisons, main_models$score[i], main_models$main_model[i])
+  })) %>% left_join(main_models %>% select(score, score_label, main_model, main_model_pretty), by = "score")
+
+  fitted_values_main <- safe_bind_rows(lapply(seq_len(nrow(main_models)), function(i) {
+    extract_fitted_values(results[[main_models$score[i]]], main_models$score[i], main_models$main_model[i])
+  })) %>% left_join(main_models %>% select(score, score_label), by = "score")
+
+  write_csv(source_effects_main, file.path(table_dir, "source_effects_main_models.csv"))
+  write_csv(date_curves_main, file.path(table_dir, "date_curves_main_models.csv"))
+  write_csv(creator_effects_main, file.path(table_dir, "creator_effects_main_models.csv"))
+  write_csv(fitted_values_main, file.path(table_dir, "fitted_values_main_models.csv"))
+
+  creator_extremes <- creator_effects_main %>%
+    group_by(score, score_label) %>% arrange(mean_std, .by_group = TRUE) %>%
+    mutate(rank_low = row_number(), rank_high = row_number(desc(mean_std))) %>%
+    filter(rank_low <= 6 | rank_high <= 6) %>% ungroup() %>% select(-rank_low, -rank_high)
+
+  gain_long <- score_diagnosis %>%
+    select(score, score_label, gain_date_vs_source, gain_creator_vs_date) %>%
+    pivot_longer(cols = c(gain_date_vs_source, gain_creator_vs_date), names_to = "component", values_to = "gain") %>%
+    mutate(component = recode(component, gain_date_vs_source = "Date over source", gain_creator_vs_date = "Creator over date"))
+
+  label_time_bins  <- make_label_time_bins(labeled_dat, n_bins = 18)
+  effect_limits    <- compute_effect_axis(date_curves_main$lower_std, date_curves_main$upper_std)
+  overlay          <- build_effect_bin_overlay(label_time_bins, effect_limits)
+  label_time_bins_plot <- overlay$data
+  effect_to_prop       <- overlay$effect_to_prop
+
+  score_order <- unname(score_labels)
+
+  # ── Figures (matching labeled-corpus set + full-corpus extras) ────
+  p_orientation <- score_dist_plot_data %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           manual_label = factor(manual_label, levels = c("non_christian", "christian"))) %>%
+    ggplot(aes(x = manual_label, y = value_std, fill = manual_label)) +
+    geom_violin(width = 0.88, alpha = 0.82, linewidth = 0.2, trim = FALSE, color = NA) +
+    geom_boxplot(width = 0.12, outlier.shape = NA, linewidth = 0.25, fill = "white", color = "grey20") +
+    facet_grid(orientation ~ score_label, scales = "free_y") +
+    scale_fill_manual(values = palettes$disc) +
+    scale_x_discrete(labels = c("non_christian" = "Non-Chr.", "christian" = "Christian")) +
+    labs(x = NULL, y = "Standardised logit score") +
+    theme_fig() + theme(legend.position = "none")
+
+  p_auc <- orientation_audit %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order))) %>%
+    ggplot(aes(x = auc_aligned, y = score_label, color = factor(flipped))) +
+    geom_vline(xintercept = 0.5, linewidth = 0.3, color = "grey65") +
+    geom_segment(aes(x = 0.5, xend = auc_aligned, yend = score_label), linewidth = 1.1, alpha = 0.9) +
+    geom_point(size = 3.0) +
+    scale_color_manual(values = palettes$flip) +
+    scale_x_continuous(breaks = c(0.5, 0.7, 0.9, 1.0), limits = c(0.48, 1.0)) +
+    labs(x = "ROC-AUC (aligned)", y = NULL) +
+    theme_fig()
+
+  p_model_heat <- model_comparisons %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order)),
+           model_pretty = factor(model_pretty, levels = model_order)) %>%
+    ggplot(aes(x = model_pretty, y = score_label, fill = delta_waic)) +
+    geom_tile(color = "white", linewidth = 0.5) +
+    geom_text(aes(label = sprintf("%.1f", delta_waic)), size = 2.6, color = "white") +
+    scale_fill_gradient(low = pal_christian, high = "#DCEAF4", trans = "reverse") +
+    labs(x = NULL, y = NULL) +
+    theme_fig() + theme(panel.grid = element_blank(),
+                        axis.text.x = element_text(angle = 40, hjust = 1, vjust = 1, size = 8.5),
+                        legend.position = "none")
+
+  # WAIC rank bars (new: matching labeled analysis)
+  max_delta <- max(model_comparisons$delta_waic, na.rm = TRUE)
+  if (!is.finite(max_delta) || max_delta <= 0) max_delta <- 1
+
+  p_rank <- model_comparisons %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           model_pretty = factor(model_pretty, levels = rev(model_order))) %>%
+    ggplot(aes(x = delta_waic, y = model_pretty, fill = waic_weight)) +
+    geom_col(width = 0.68) +
+    geom_text(aes(label = sprintf("%.1f", delta_waic)), hjust = -0.12, size = 2.8, color = pal_axis) +
+    facet_wrap(~ score_label, scales = "free_y", ncol = 2) +
+    scale_fill_gradient(low = "#DCEAF4", high = pal_christian) +
+    coord_cartesian(xlim = c(0, max_delta * 1.08), clip = "off") +
+    labs(x = expression(Delta * WAIC), y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none",
+                        axis.text.y = element_text(size = 8.5))
+
+  p_source_effect <- source_effects_main %>%
+    mutate(score_label = factor(score_label, levels = score_order)) %>%
+    ggplot(aes(x = mean_std, y = score_label, xmin = lower_std, xmax = upper_std, color = prob_positive)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_linerange(linewidth = 1.0, alpha = 0.95) + geom_point(size = 2.8) +
+    scale_color_gradient(low = "#DCEAF4", high = pal_christian) +
+    labs(x = "Full-fit unlabeled source effect / SD(logit)", y = NULL) +
+    theme_fig() + theme(legend.position = "none")
+
+  p_date_overlay <- date_curves_main %>%
+    mutate(score_label = factor(score_label, levels = score_order)) %>%
+    ggplot(aes(x = date_mid, y = mean_std, color = score_label, fill = score_label)) +
+    geom_ribbon(data = label_time_bins_plot, aes(x = date_mid, ymin = lower_y, ymax = upper_y), inherit.aes = FALSE, fill = "grey40", alpha = 0.08) +
+    geom_line(data = label_time_bins_plot, aes(x = date_mid, y = prop_y), inherit.aes = FALSE, color = "grey20", linewidth = 0.85, linetype = "22") +
+    geom_point(data = label_time_bins_plot, aes(x = date_mid, y = prop_y, size = n), inherit.aes = FALSE, shape = 21, stroke = 0.3, fill = "white", color = "grey20") +
+    geom_hline(yintercept = 0, linewidth = 0.25, color = "grey70") +
+    geom_ribbon(aes(ymin = lower_std, ymax = upper_std), alpha = 0.08, linewidth = 0) +
+    geom_line(linewidth = 0.95) +
+    scale_x_continuous(breaks = nice_x_breaks) +
+    scale_y_continuous(limits = c(effect_limits$ymin, effect_limits$ymax), name = "Temporal effect / SD(logit)",
+      sec.axis = sec_axis(~ effect_to_prop(.), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = scales::label_percent(accuracy = 1), name = "Observed Christian share")) +
+    scale_size_continuous(range = c(1.6, 3.8), guide = "none") +
+    labs(x = "Date (CE)") +
+    theme_fig() + theme(legend.position = "bottom")
+
+  p_creator <- creator_extremes %>%
+    mutate(score_label = factor(score_label, levels = score_order)) %>%
+    group_by(score) %>% mutate(creator = fct_reorder(creator, mean_std)) %>% ungroup() %>%
+    ggplot(aes(x = mean_std, y = creator)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_linerange(aes(xmin = lower_std, xmax = upper_std), linewidth = 0.9, color = "grey55") +
+    geom_point(size = 2.7, color = pal_christian) +
+    facet_wrap(~ score_label, scales = "free_y", ncol = 2) +
+    labs(x = "Creator effect / SD(logit)", y = NULL) +
+    theme_fig() + theme(panel.grid.major.y = element_blank(), legend.position = "none",
+                        axis.text.y = element_text(size = 8))
+
+  p_gains <- gain_long %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order))) %>%
+    ggplot(aes(x = gain, y = score_label, color = component)) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_segment(aes(x = 0, xend = gain, yend = score_label), linewidth = 1.1, alpha = 0.9) +
+    geom_point(size = 3.0) +
+    facet_wrap(~ component, ncol = 1, scales = "free_x") +
+    scale_color_manual(values = palettes$comp_source) +
+    labs(x = expression(Delta * WAIC), y = NULL) +
+    theme_fig() + theme(legend.position = "none")
+
+  p_main_models <- main_models %>%
+    mutate(score_label = factor(score_label, levels = rev(score_order))) %>%
+    ggplot(aes(x = main_waic, y = score_label)) +
+    geom_point(size = 2.8, color = pal_christian) +
+    geom_text(aes(label = main_model_pretty), nudge_x = 0.02 * diff(range(main_models$main_waic, na.rm = TRUE)), hjust = 0, size = 2.9, color = pal_axis) +
+    labs(x = "Main-model WAIC", y = NULL) +
+    theme_fig()
+
+  p_fitted_density <- fitted_values_main %>%
+    mutate(score_label = factor(score_label, levels = score_order)) %>%
+    ggplot(aes(x = mean, color = prediction_source, fill = prediction_source)) +
+    geom_density(alpha = 0.12, linewidth = 0.85) +
+    facet_wrap(~ score_label, scales = "free", ncol = 2) +
+    labs(x = "Main-model fitted value (logit)", y = "Density") +
+    theme_fig() + theme(legend.position = "bottom")
+
+  # Model-path plot (new for full-corpus: source → date → creator)
+  p_model_path <- score_diagnosis %>%
+    transmute(score_label, `Source only` = source_only_waic, `+ Date` = best_date_waic, `+ Creator` = best_creator_waic) %>%
+    pivot_longer(-score_label, names_to = "stage", values_to = "waic") %>%
+    mutate(score_label = factor(score_label, levels = score_order),
+           stage = factor(stage, levels = c("Source only", "+ Date", "+ Creator"))) %>%
+    ggplot(aes(x = stage, y = waic, group = score_label, color = score_label)) +
+    geom_line(linewidth = 0.95, alpha = 0.9) + geom_point(size = 2.6) +
+    labs(x = NULL, y = "WAIC") +
+    theme_fig() + theme(legend.position = "bottom", axis.text.x = element_text(size = 9.5))
+
+  # ── Save all plots ────────────────────────────────────────────────
+  plot_list <- list(
+    list(plot = p_orientation,   name = "01_orientation_raw_vs_aligned",  width = 10.8, height = 6.8),
+    list(plot = p_auc,           name = "02_orientation_auc",             width = 7.0,  height = 4.8),
+    list(plot = p_rank,          name = "03_waic_rank_bars",              width = 11.2, height = 8.8),
+    list(plot = p_model_heat,    name = "04_model_heatmap",              width = 11.4, height = 5.2),
+    list(plot = p_source_effect, name = "05_source_effects",             width = 7.4,  height = 4.8),
+    list(plot = p_date_overlay,  name = "06_temporal_effects_overlay",   width = 9.2,  height = 5.6),
+    list(plot = p_creator,       name = "07_creator_effects_extremes",   width = 11.0, height = 8.8),
+    list(plot = p_gains,         name = "08_component_gains",            width = 8.4,  height = 6.6),
+    list(plot = p_main_models,   name = "09_main_models",               width = 8.6,  height = 4.8),
+    list(plot = p_fitted_density, name = "10_fitted_density_by_source", width = 10.6, height = 8.2),
+    list(plot = p_model_path,    name = "11_model_path",                width = 7.2,  height = 4.8)
+  )
+  purrr::walk(plot_list, ~ { print(.x$plot); save_plot(.x$plot, .x$name, plot_dir, .x$width, .x$height) })
+
+  writeLines(c("Full-corpus score modelling summary", "",
+    paste0(score_diagnosis$score_label, ": flipped=", score_diagnosis$flipped,
+           "; best=", score_diagnosis$best_model_pretty,
+           "; main=", main_models$main_model_pretty[match(score_diagnosis$score, main_models$score)],
+           "; date gain=", round(score_diagnosis$gain_date_vs_source, 2), " [", score_diagnosis$gain_date_support, "]",
+           "; creator gain=", round(score_diagnosis$gain_creator_vs_date, 2), " [", score_diagnosis$gain_creator_support, "]")
+  ), file.path(out_dir, "analysis_summary.txt"))
+
+  invisible(list(out_dir = out_dir))
+}
+```
+
+## Run all analyses
+
+```{r}
+analysis_specs <- list(
+  manually_labeled      = list(kind = "labeled_main", out_subdir = "inla_effect_audit_v3"),
+  christian_and_window  = list(kind = "targeted",     out_subdir = file.path("inla_effect_audit_v3", "targeted_sensitivity")),
+  full_corpus           = list(kind = "full_corpus",   out_subdir = "inla_full_corpus_score_audit")
+)
+
+palettes <- make_palettes()
+dat      <- load_base_data(path, bert_dir)
+
+# Score columns use legacy "ridge" name in the data
+fixed_score_cols <- c(
+  "score_nb_logit",
+  "score_ridge_logit",
+  "score_svm_logit",
+  "score_xgb_logit",
+  "score_lgb_logit",
+  "score_bert_logit"
+)
+fixed_score_cols   <- fixed_score_cols[fixed_score_cols %in% names(dat)]
+fixed_score_labels <- set_names(map_chr(fixed_score_cols, pretty_score_fixed), fixed_score_cols)
+
+analysis_results <- purrr::imap(analysis_specs, function(spec, nm) {
+  message("\n--- Running analysis: ", nm, " ---")
+  switch(
+    spec$kind,
+    labeled_main = run_labeled_main_analysis(spec, dat, fixed_score_cols, fixed_score_labels, palettes),
+    targeted     = run_targeted_analysis(spec, dat, palettes),
+    full_corpus  = run_full_corpus_analysis(spec, dat, fixed_score_cols, palettes),
+    stop("Unknown analysis kind: ", spec$kind)
+  )
+})
+```
+
+## Full-corpus label-effects figure (saved into the full-corpus results folder)
+
+```{r}
+full_corpus_label_effect_figure <- function(spec, dat, palettes, use_saved_fits = TRUE) {
+  out_dir   <- file.path(results_path, spec$out_subdir)
+  plot_dir  <- file.path(out_dir, "plots")
+  table_dir <- file.path(out_dir, "tables")
+  fit_dir   <- file.path(out_dir, "fits")
+  ensure_dirs(out_dir, plot_dir, table_dir, fit_dir)
+
+  fits_file <- file.path(fit_dir, "full_corpus_label_effect_fits.rds")
+
+  all_score_cols <- names(dat)[str_detect(names(dat), "^score_") & str_detect(names(dat), "_logit$")]
+  score_labels   <- set_names(map_chr(all_score_cols, pretty_score_general), all_score_cols)
+
+  aligned <- add_aligned_scores(dat, all_score_cols, score_labels)
+  dat_aligned <- aligned$dat
+
+  model_meta_label <- build_labeled_main_model_meta()
+  model_levels_label <- model_meta_label$model_pretty
+
+  if (use_saved_fits && file.exists(fits_file)) {
+    label_results_full <- readRDS(fits_file)
+  } else {
+    label_results_full <- setNames(vector("list", length(all_score_cols)), all_score_cols)
+
+    for (sc in all_score_cols) {
+      message("Fitting full-corpus label-effect models for: ", sc)
+      df_lab <- make_analysis_df(
+        dat_aligned,
+        paste0(sc, "_aligned"),
+        labels = c("non_christian", "christian")
+      )
+      label_results_full[[sc]] <- fit_grid_inla(
+        df_lab,
+        build_label_forms(df_lab),
+        analysis_name = "full_corpus_label_effects",
+        score_name = sc
+      )
+    }
+
+    suppressWarnings(saveRDS(label_results_full, fits_file))
+  }
+
+  label_model_comparisons_full <- safe_bind_rows(lapply(label_results_full, `[[`, "comparison")) %>%
+    left_join(model_meta_label, by = "model") %>%
+    mutate(
+      score_label = recode(score, !!!score_labels),
+      model_pretty = factor(model_pretty, levels = model_levels_label)
+    )
+
+  if (nrow(label_model_comparisons_full) == 0) {
+    stop("No successful INLA model comparisons were produced.")
+  }
+
+  write_csv(
+    label_model_comparisons_full,
+    file.path(table_dir, "full_corpus_label_model_comparisons.csv")
+  )
+
+  best_label_models_full <- label_model_comparisons_full %>%
+    filter(has_label) %>%
+    group_by(score) %>%
+    slice_min(waic, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    select(score, model, model_pretty, waic)
+
+  if (nrow(best_label_models_full) == 0) {
+    stop("No successful label-containing models were available to plot.")
+  }
+
+  write_csv(
+    best_label_models_full,
+    file.path(table_dir, "full_corpus_best_label_models.csv")
+  )
+
+  label_effects_full_best <- safe_bind_rows(lapply(seq_len(nrow(best_label_models_full)), function(i) {
+    extract_label_effect(
+      label_results_full[[best_label_models_full$score[i]]],
+      label_model_comparisons_full,
+      best_label_models_full$score[i],
+      best_label_models_full$model[i]
+    )
+  })) %>%
+    left_join(
+      best_label_models_full %>%
+        rename(
+          best_label_model = model,
+          best_label_model_pretty = model_pretty
+        ),
+      by = c("score", "model" = "best_label_model")
+    ) %>%
+    mutate(
+      score_label = recode(score, !!!score_labels),
+      score_label = factor(score_label, levels = unname(score_labels)),
+      best_label_model_pretty = as.character(best_label_model_pretty)
+    )
+
+  if (nrow(label_effects_full_best) == 0) {
+    stop("No label effects could be extracted from the fitted models.")
+  }
+
+  write_csv(
+    label_effects_full_best,
+    file.path(table_dir, "full_corpus_label_effects_best_models.csv")
+  )
+
+  plot_dat <- label_effects_full_best %>%
+    mutate(score_label = factor(score_label, levels = rev(unname(score_labels))))
+
+  xr <- range(c(plot_dat$lower_std, plot_dat$upper_std), na.rm = TRUE)
+  xspan <- xr[2] - xr[1]
+  if (!is.finite(xspan) || xspan <= 0) xspan <- 1
+  xpad_right <- 0.35 * xspan
+  xpad_left  <- 0.08 * xspan
+
+  p_full_corpus_label_effect <- ggplot(
+    plot_dat,
+    aes(x = mean_std, y = score_label, color = prob_positive)
+  ) +
+    geom_vline(xintercept = 0, linewidth = 0.3, color = "grey65") +
+    geom_linerange(aes(xmin = lower_std, xmax = upper_std), linewidth = 0.95, alpha = 0.95) +
+    geom_point(size = 2.8) +
+    geom_text(
+      aes(
+        x = upper_std,
+        y = score_label,
+        label = best_label_model_pretty
+      ),
+      inherit.aes = FALSE,
+      hjust = 0,
+      nudge_x = 0.03 * xspan,
+      size = 2.8,
+      color = pal_axis
+    ) +
+    scale_color_gradient(low = "#DCEAF4", high = pal_christian) +
+    coord_cartesian(
+      xlim = c(xr[1] - xpad_left, xr[2] + xpad_right),
+      clip = "off"
+    ) +
+    labs(x = "Christian-label effect / SD(logit)", y = NULL) +
+    theme_fig() +
+    theme(
+      panel.grid.major.y = element_blank(),
+      legend.position = "none",
+      plot.margin = margin(8, 110, 8, 8)
+    )
+
+  print(p_full_corpus_label_effect)
+
+  save_plot(
+    p_full_corpus_label_effect,
+    "12_full_corpus_label_effects",
+    plot_dir,
+    width = 8.8,
+    height = 4.8
+  )
+
+  invisible(list(
+    label_results = label_results_full,
+    label_model_comparisons = label_model_comparisons_full,
+    best_label_models = best_label_models_full,
+    label_effects = label_effects_full_best,
+    plot = p_full_corpus_label_effect
+  ))
+}
+
+full_corpus_label_effect_results <- full_corpus_label_effect_figure(
+  analysis_specs$full_corpus,
+  dat,
+  palettes,
+  use_saved_fits = TRUE
+)
+```

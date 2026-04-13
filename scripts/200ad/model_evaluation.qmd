@@ -31,17 +31,17 @@ suppressPackageStartupMessages({
 
 options(stringsAsFactors = FALSE)
 
-data_path <- "../../data/processed_texts/600ad"
+data_path <- "../../data/processed_texts/200ad"
 
-corpus_file <- file.path(data_path, "corpus_600ad.csv")
-labels_file <- file.path(data_path, "corpus_600ad_labeled.csv")
+corpus_file <- file.path(data_path, "corpus_200ad.csv")
+labels_file <- file.path(data_path, "corpus_200ad_labeled.csv")
 
 stopwords_file_1 <- "../../data/stopwords/stopwords_latin1.txt"
 stopwords_file_2 <- "../../data/stopwords/stopwords_latin2.txt"
 
-predictions_dir <- "../../results/predictions/non_transformer_lemmatized/600ad"
+predictions_dir <- "../../results/predictions/non_transformer_lemmatized/200ad"
 
-deployment_outputs_file <- file.path(predictions_dir, "corpus_600ad_model_outputs_oof.csv")
+deployment_outputs_file <- file.path(predictions_dir, "corpus_200ad_model_outputs_oof.csv")
 model_outputs_file <- deployment_outputs_file
 oof_eval_file <- file.path(predictions_dir, "oof_eval_predictions.csv")
 oof_metrics_file <- file.path(predictions_dir, "model_metrics_oof.csv")
@@ -53,7 +53,7 @@ thresholds_file <- deployment_thresholds_file
 hyperparams_full_file <- file.path(predictions_dir, "model_hyperparameters_full.csv")
 hyperparams_outer_file <- file.path(predictions_dir, "model_hyperparameters_outer.csv")
 
-bert_dir <- "../../results/predictions/bert_outputs_unlemmatized/600ad"
+bert_dir <- "../../results/predictions/bert_outputs_unlemmatized/200ad"
 ```
 
 ## Hyperparamater loading and model paramaters declarations
@@ -629,10 +629,10 @@ if ("prediction_source.model" %in% names(corpus_df) && !"prediction_source" %in%
   names(corpus_df)[names(corpus_df) == "prediction_source.model"] <- "prediction_source"
 }
 
-model_suffix_cols <- grep("\.model$", names(corpus_df), value = TRUE)
+model_suffix_cols <- grep("\\.model$", names(corpus_df), value = TRUE)
 if (length(model_suffix_cols)) {
   for (col in model_suffix_cols) {
-    base_col <- sub("\.model$", "", col)
+    base_col <- sub("\\.model$", "", col)
     if (base_col %in% names(corpus_df)) {
       corpus_df[[base_col]] <- coalesce(corpus_df[[base_col]], corpus_df[[col]])
     } else {
@@ -660,7 +660,7 @@ if (n_labeled_with_probs == 0) {
     "Join produced 0 labeled rows with non-NA deployment predictions. ",
     "This typically means the join key ('", paste(join_keys, collapse = "', '"),
     "') did not match between corpus_df and deployment outputs. ",
-    "Verify that the id values in corpus_600ad.csv match those in ",
+    "Verify that the id values in corpus_200ad.csv match those in ",
     basename(model_outputs_file), "."
   )
 }
@@ -807,7 +807,7 @@ overwrite_fig_cache <- FALSE
 #| label: theme-and-palettes
 #| message: false
 
-fig_dir <- "../../results/model_evaluation//figures/600ad"
+fig_dir <- "../../results/model_evaluation//figures/200ad"
 cache_dir <- "../../results/model_evaluation/cache"
 dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1418,278 +1418,6 @@ add_scaled_columns <- function(x) {
     ungroup()
 }
 
-build_plot_tables <- function(oof_long) {
-  roc_input <- oof_long %>%
-    filter(!is.na(true_label), !is.na(prob)) %>%
-    group_by(model) %>%
-    filter(dplyr::n_distinct(true_label) == 2) %>%
-    ungroup()
-
-  if (nrow(roc_input) == 0) {
-    stop(
-      "roc_input is empty after filtering. This means no model has both ",
-      "'christian' and 'non_christian' labels with non-NA probabilities. ",
-      "Check that the join between corpus_df and model_outputs succeeded ",
-      "and that oof_long contains valid data."
-    )
-  }
-
-  # FIX: drop = TRUE prevents split() from creating empty data frames
-  # for unused factor levels, which would cause pROC::roc() to error.
-  roc_list <- split(roc_input, roc_input$model, drop = TRUE) %>%
-    map(~pROC::roc(
-      .x$true_label,
-      .x$prob,
-      levels = c("non_christian", "christian"),
-      direction = "<",
-      quiet = TRUE
-    ))
-
-  auc_tbl <- tibble(
-    model = factor(names(roc_list), levels = names(pal_model)),
-    auc = map_dbl(roc_list, ~as.numeric(pROC::auc(.x)))
-  ) %>%
-    mutate(model_lab = paste0(as.character(model), " (AUC=", sprintf("%.3f", auc), ")"))
-
-  roc_df <- map2_dfr(roc_list, names(roc_list), function(r, nm) {
-    tibble(
-      model = factor(nm, levels = names(pal_model)),
-      fpr = 1 - r$specificities,
-      tpr = r$sensitivities
-    )
-  }) %>%
-    left_join(auc_tbl %>% select(model, model_lab), by = "model") %>%
-    mutate(model_lab = factor(model_lab, levels = auc_tbl$model_lab))
-
-  wide_logits <- roc_input %>%
-    select(id, model, logit) %>%
-    distinct() %>%
-    pivot_wider(names_from = model, values_from = logit)
-
-  M <- as.matrix(wide_logits %>% select(-id))
-  rho <- cor(M, method = "spearman", use = "pairwise.complete.obs")
-
-  rho_df <- as.data.frame(rho) %>%
-    mutate(model_x = rownames(.)) %>%
-    pivot_longer(-model_x, names_to = "model_y", values_to = "rho") %>%
-    mutate(
-      model_x = factor(model_x, levels = names(pal_model)),
-      model_y = factor(model_y, levels = names(pal_model))
-    )
-
-  fold_metrics <- roc_input %>%
-    group_by(model, fold) %>%
-    summarise(
-      threshold_youden = first(threshold_youden),
-      F1 = f1_from(true_label, prob, thr = first(threshold_youden)),
-      .groups = "drop"
-    )
-
-  cm_long <- roc_input %>%
-    group_by(model) %>%
-    group_modify(~cm_df(.x$true_label, .x$prob, thr = first(.x$threshold_youden))) %>%
-    ungroup()
-
-  list(
-    roc_list = roc_list,
-    auc_tbl = auc_tbl,
-    roc_df = roc_df,
-    wide_logits = wide_logits,
-    rho = rho,
-    rho_df = rho_df,
-    fold_metrics = fold_metrics,
-    cm_long = cm_long
-  )
-}
-
-save_cache_B <- function(path, plot_tables, top_feats = NULL) {
-  saveRDS(
-    list(
-      created_at = Sys.time(),
-      roc_list = plot_tables$roc_list,
-      auc_tbl = plot_tables$auc_tbl,
-      roc_df = plot_tables$roc_df,
-      wide_logits = plot_tables$wide_logits,
-      rho = plot_tables$rho,
-      rho_df = plot_tables$rho_df,
-      top_feats = top_feats,
-      fold_metrics = plot_tables$fold_metrics,
-      cm_long = plot_tables$cm_long
-    ),
-    path,
-    compress = "xz"
-  )
-}
-
-read_external_oof <- function(path, truth_lookup, model_name, threshold_youden = NULL) {
-  x <- read_table_any(path)
-
-  id_col <- first_existing_col(x, c("row_id", "id", "doc_id"))
-  prob_col <- first_existing_col(x, c("prob_bert", "prob", "prob_christian", "p_christian", "bert_prob"))
-  logit_col <- first_existing_col(x, c("score_bert_logit", "logit", "bert_logit"))
-  score_col <- first_existing_col(x, c("score_bert_margin", "score", "margin", "bert_score"))
-  fold_col <- first_existing_col(x, c("fold", "fold_id"))
-
-  stopifnot(!is.na(id_col), !is.na(prob_col))
-
-  thr_col <- first_existing_col(x, c("threshold_youden", "youden_threshold", "threshold"))
-  thr_val <- if (!is.null(threshold_youden) && length(threshold_youden) && is.finite(threshold_youden)) {
-    as.numeric(threshold_youden[[1]])
-  } else if (!is.na(thr_col)) {
-    as.numeric(x[[thr_col]][[1]])
-  } else {
-    0.5
-  }
-
-  out <- x %>%
-    transmute(
-      row_id = suppressWarnings(as.integer(as.character(.data[[id_col]]))),
-      doc_id = if ("id" %in% names(x)) as.character(.data[["id"]]) else as.character(.data[[id_col]]),
-      prob = safe_prob(.data[[prob_col]]),
-      logit = if (!is.na(logit_col)) as.numeric(.data[[logit_col]]) else safe_logit(.data[[prob_col]]),
-      score = if (!is.na(score_col)) {
-        as.numeric(.data[[score_col]])
-      } else if (!is.na(logit_col)) {
-        as.numeric(.data[[logit_col]])
-      } else {
-        safe_logit(.data[[prob_col]])
-      },
-      fold = if (!is.na(fold_col)) as.integer(.data[[fold_col]]) else NA_integer_
-    ) %>%
-    left_join(truth_lookup %>% select(row_id, true_label_row = true_label), by = "row_id") %>%
-    left_join(truth_lookup %>% select(id, true_label_id = true_label), by = c("doc_id" = "id")) %>%
-    mutate(true_label = coalesce(true_label_row, true_label_id)) %>%
-    transmute(
-      id = ifelse(!is.na(row_id), as.character(row_id), as.character(doc_id)),
-      fold = fold,
-      true_label = factor(true_label, levels = c("non_christian", "christian")),
-      model = model_name,
-      prob = prob,
-      logit = logit,
-      score = score,
-      threshold_youden = thr_val
-    )
-
-  out
-}
-
-merge_external_full_predictions <- function(df_in, path, model_stub = "bert", threshold_youden = NULL, threshold_f1 = NULL) {
-  x <- read_table_any(path)
-
-  id_col <- first_existing_col(x, c("row_id", "id", "doc_id"))
-  prob_col <- first_existing_col(x, c("prob_bert", "prob", "prob_christian", "p_christian", "bert_prob"))
-  logit_col <- first_existing_col(x, c("score_bert_logit", "logit", "bert_logit"))
-  score_col <- first_existing_col(x, c("score_bert_margin", "score", "margin", "bert_score"))
-
-  stopifnot(!is.na(id_col), !is.na(prob_col))
-
-  thr_y_col <- first_existing_col(x, c("threshold_youden", "youden_threshold", "threshold"))
-  thr_f1_col <- first_existing_col(x, c("threshold_f1", "f1_threshold"))
-  thr_y <- if (!is.null(threshold_youden) && length(threshold_youden) && is.finite(threshold_youden)) {
-    as.numeric(threshold_youden[[1]])
-  } else if (!is.na(thr_y_col)) {
-    as.numeric(x[[thr_y_col]][[1]])
-  } else {
-    0.5
-  }
-  thr_f1 <- if (!is.null(threshold_f1) && length(threshold_f1) && is.finite(threshold_f1)) {
-    as.numeric(threshold_f1[[1]])
-  } else if (!is.na(thr_f1_col)) {
-    as.numeric(x[[thr_f1_col]][[1]])
-  } else {
-    thr_y
-  }
-
-  tmp <- x %>%
-    transmute(
-      row_id = .data[[id_col]],
-      prob_ext = safe_prob(.data[[prob_col]]),
-      logit_ext = if (!is.na(logit_col)) as.numeric(.data[[logit_col]]) else safe_logit(.data[[prob_col]]),
-      score_ext = if (!is.na(score_col)) {
-        as.numeric(.data[[score_col]])
-      } else if (!is.na(logit_col)) {
-        as.numeric(.data[[logit_col]])
-      } else {
-        safe_logit(.data[[prob_col]])
-      }
-    )
-
-  out <- df_in %>%
-    left_join(tmp, by = "row_id")
-
-  out[[paste0("prob_", model_stub)]] <- out$prob_ext
-  out[[paste0("score_", model_stub, "_logit")]] <- out$logit_ext
-  out[[paste0("score_", model_stub, "_raw")]] <- out$score_ext
-  out[[paste0("threshold_", model_stub, "_youden")]] <- thr_y
-  out[[paste0("threshold_", model_stub, "_f1")]] <- thr_f1
-  out[[paste0("label_", model_stub, "_youden")]] <- ifelse(out$prob_ext >= thr_y, "christian", "non_christian")
-  out[[paste0("label_", model_stub, "_f1")]] <- ifelse(out$prob_ext >= thr_f1, "christian", "non_christian")
-  out[[paste0("label_", model_stub)]] <- out[[paste0("label_", model_stub, "_youden")]]
-
-  out %>%
-    select(-prob_ext, -logit_ext, -score_ext)
-}
-
-read_external_learning_curve <- function(path, model_name) {
-  x <- read_table_any(path)
-
-  frac_col <- first_existing_col(x, c("frac", "fraction", "train_frac"))
-  rep_col  <- first_existing_col(x, c("rep", "repeat", "repetition"))
-  auc_col  <- first_existing_col(x, c("auc", "roc_auc"))
-  f1_col   <- first_existing_col(x, c("f1", "f1_score", "f1_youden", "f1_f1"))
-
-  stopifnot(!is.na(frac_col), !is.na(rep_col), !is.na(auc_col))
-
-  x %>%
-    transmute(
-      model = model_name,
-      frac = as.numeric(.data[[frac_col]]),
-      rep = as.integer(.data[[rep_col]]),
-      auc = as.numeric(.data[[auc_col]]),
-      f1 = if (!is.na(f1_col)) as.numeric(.data[[f1_col]]) else NA_real_
-    )
-}
-
-read_external_features <- function(path, model_name) {
-  x <- read_table_any(path)
-
-  feat_col <- first_existing_col(x, c("feature", "term", "token"))
-  imp_col  <- first_existing_col(x, c("importance", "weight", "coef", "estimate", "value"))
-  dir_col  <- first_existing_col(x, c("direction", "class", "side"))
-
-  if (is.na(feat_col) || is.na(imp_col)) return(NULL)
-
-  x %>%
-    transmute(
-      model = model_name,
-      feature = as.character(.data[[feat_col]]),
-      importance = as.numeric(.data[[imp_col]]),
-      direction = if (!is.na(dir_col)) as.character(.data[[dir_col]]) else NA_character_
-    )
-}
-
-make_feature_plot <- function(top_feats) {
-  if (is.null(top_feats) || !nrow(top_feats)) return(NULL)
-
-  plot_df <- top_feats %>%
-    group_by(model) %>%
-    slice_max(order_by = abs(importance), n = 20, with_ties = FALSE) %>%
-    ungroup() %>%
-    mutate(feature = reorder(feature, importance))
-
-  ggplot(plot_df, aes(x = importance, y = feature, fill = model)) +
-    geom_col(show.legend = FALSE) +
-    facet_wrap(~ model, scales = "free_y") +
-    scale_fill_manual(values = pal_model) +
-    labs(
-      x = "Importance",
-      y = NULL
-    ) +
-    theme_modelviz
-}
-```
-
-```{r}
 #| label: build-oof-long
 #| message: false
 

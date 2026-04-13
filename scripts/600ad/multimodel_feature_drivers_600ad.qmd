@@ -330,7 +330,6 @@ predict_lgb_contrib <- function(model, x, feature_names, num_iteration = NULL) {
 }
 ```
 
-
 ```{r}
 summarize_driver_matrix <- function(contrib, x_ref, y, feature_names, model_name) {
   if (ncol(contrib) != length(feature_names)) stop("contrib has wrong number of columns")
@@ -388,7 +387,7 @@ summarize_driver_matrix <- function(contrib, x_ref, y, feature_names, model_name
 }
 
 
-driver_theme <- function(base_size = 12) {
+driver_theme <- function(base_size = 16) {
   theme_minimal(base_size = base_size) +
     theme(
       text               = element_text(colour = col_text),
@@ -396,12 +395,16 @@ driver_theme <- function(base_size = 12) {
       panel.grid.major.y = element_blank(),
       panel.grid.major.x = element_line(colour = col_grid, linewidth = 0.3),
       axis.title.y       = element_blank(),
-      axis.text.y        = element_text(size = rel(0.88)),
-      strip.text          = element_text(face = "bold", size = rel(1.05)),
+      axis.title.x       = element_text(size = rel(1.0), margin = margin(t = 8)),
+      axis.text.y        = element_text(size = rel(0.92)),
+      axis.text.x        = element_text(size = rel(0.88)),
+      strip.text          = element_text(face = "bold", size = rel(1.1)),
       legend.position     = "bottom",
       legend.box          = "horizontal",
-      plot.title          = element_text(face = "bold", size = rel(1.15)),
-      plot.subtitle       = element_text(colour = "grey40", size = rel(0.9)),
+      legend.text         = element_text(size = rel(0.88)),
+      legend.title        = element_text(size = rel(0.92)),
+      plot.title          = element_text(face = "bold", size = rel(1.2)),
+      plot.subtitle       = element_text(colour = "grey40", size = rel(0.95)),
       plot.margin         = margin(10, 14, 10, 14)
     )
 }
@@ -477,7 +480,7 @@ top_driver_plot <- function(tbl, top_n = 20, min_present_group = 2L) {
       )
     ) +
     scale_size_continuous(
-      range  = c(2.3, 5.5),
+      range  = c(2.8, 6.5),
       labels = scales::percent_format(accuracy = 1)
     ) +
     labs(
@@ -517,7 +520,7 @@ agreement_plot <- function(tbl, direction_keep, top_n = 30) {
       stroke = 0.3, alpha = 0.92
     ) +
     scale_size_continuous(
-      range  = c(2.3, 5.5),
+      range  = c(2.8, 6.5),
       labels = scales::percent_format(accuracy = 1)
     ) +
     labs(
@@ -568,7 +571,7 @@ consensus_both_plot <- function(tbl, top_n_each = 25, min_present_group = 2L) {
       values = c("christian" = col_christian, "non_christian" = col_non_christian)
     ) +
     scale_size_continuous(
-      range  = c(2.3, 5.5),
+      range  = c(2.8, 6.5),
       labels = scales::percent_format(accuracy = 1)
     ) +
     labs(
@@ -773,7 +776,7 @@ readr::write_csv(driver_cor_long, file.path(fig_dir, "feature_driver_correlation
 
 p_cor <- ggplot(driver_cor_long, aes(x = model_1, y = model_2, fill = correlation)) +
   geom_tile(color = "white", linewidth = 0.7) +
-  geom_text(aes(label = sprintf("%.2f", correlation)), size = 3.4, colour = col_text) +
+  geom_text(aes(label = sprintf("%.2f", correlation)), size = 5, colour = col_text) +
   scale_fill_gradient2(
     low      = col_non_christian,
     mid      = "white",
@@ -783,12 +786,14 @@ p_cor <- ggplot(driver_cor_long, aes(x = model_1, y = model_2, fill = correlatio
   ) +
   coord_equal() +
   labs(x = NULL, y = NULL, fill = "correlation") +
-  theme_minimal(base_size = 12) +
+  theme_minimal(base_size = 16) +
   theme(
     panel.grid      = element_blank(),
-    axis.text.x     = element_text(angle = 45, hjust = 1, colour = col_text),
-    axis.text.y     = element_text(colour = col_text),
+    axis.text.x     = element_text(angle = 45, hjust = 1, colour = col_text, size = 14),
+    axis.text.y     = element_text(colour = col_text, size = 14),
     legend.position = "bottom",
+    legend.text     = element_text(size = 12),
+    legend.title    = element_text(size = 13),
     plot.margin     = margin(10, 14, 10, 14)
   )
 

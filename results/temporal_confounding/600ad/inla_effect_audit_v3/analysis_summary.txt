@@ -1,8 +1,8 @@
 Model ranking summary
 
-Latin BERT: flipped=FALSE; best=Label + linear date + creator (WAIC 1849.86); second=Label + linear date; gap=0.3 [negligible]; label gain over best date-only=108.5 [large]; creator gain over best label+date=0.3 [negligible]
-LightGBM: flipped=FALSE; best=Label + RW1 date + creator (WAIC 1281.2); second=Label + RW2 date + creator; gap=2.48 [small]; label gain over best date-only=255.21 [large]; creator gain over best label+date=69.89 [large]
-NB: flipped=FALSE; best=Label + RW2 date + creator (WAIC 3041.55); second=Label + linear date + creator; gap=5.52 [small]; label gain over best date-only=233.49 [large]; creator gain over best label+date=6.01 [moderate]
-Ridge: flipped=FALSE; best=Label + RW2 date + creator (WAIC 1031.82); second=Label + RW1 date + creator; gap=0.13 [negligible]; label gain over best date-only=269.18 [large]; creator gain over best label+date=30.38 [large]
-SVM: flipped=FALSE; best=Label + RW1 date + creator (WAIC 1526.41); second=Label + RW2 date + creator; gap=1.65 [negligible]; label gain over best date-only=274.91 [large]; creator gain over best label+date=35.65 [large]
-XGBoost: flipped=FALSE; best=Label + RW1 date + creator (WAIC 1306.54); second=Label + RW2 date + creator; gap=0.92 [negligible]; label gain over best date-only=272.03 [large]; creator gain over best label+date=83.68 [large]
+Latin BERT: flipped=FALSE; best=Label + linear date + creator (WAIC 1849.86); second=Label + linear date; gap=0.3 [negligible]; label gain=108.5 [large]; creator gain=0.3 [negligible]
+LightGBM: flipped=FALSE; best=Label + RW1 date + creator (WAIC 1281.2); second=Label + RW2 date + creator; gap=2.48 [small]; label gain=255.21 [large]; creator gain=69.89 [large]
+NB: flipped=FALSE; best=Label + RW2 date + creator (WAIC 3041.55); second=Label + linear date + creator; gap=5.52 [small]; label gain=233.49 [large]; creator gain=6.01 [moderate]
+Elastic net: flipped=FALSE; best=Label + RW2 date + creator (WAIC 1031.82); second=Label + RW1 date + creator; gap=0.13 [negligible]; label gain=269.18 [large]; creator gain=30.38 [large]
+SVM: flipped=FALSE; best=Label + RW1 date + creator (WAIC 1526.34); second=Label + RW2 date + creator; gap=1.72 [negligible]; label gain=274.91 [large]; creator gain=35.72 [large]
+XGBoost: flipped=FALSE; best=Label + RW1 date + creator (WAIC 1306.54); second=Label + RW2 date + creator; gap=0.92 [negligible]; label gain=272.02 [large]; creator gain=83.68 [large]

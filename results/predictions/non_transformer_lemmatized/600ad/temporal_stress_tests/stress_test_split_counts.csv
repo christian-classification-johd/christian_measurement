@@ -1,0 +1,9 @@
+split_id,train_label,test_label,train_n,train_pos,train_neg,test_n,test_pos,test_neg,train_ok,test_ok,note
+train_pre200_test_post300,mid_year <= 199,mid_year >= 301,206,3,203,131,62,69,FALSE,TRUE,train_set_needs_at_least_16_per_class_for_stable_crossfit
+train_post300_test_pre200,mid_year >= 301,mid_year <= 199,131,62,69,206,3,203,TRUE,TRUE,ok
+train_pre300_test_post300,mid_year < 300,mid_year >= 301,228,14,214,131,62,69,FALSE,TRUE,train_set_needs_at_least_16_per_class_for_stable_crossfit
+train_post300_test_pre300,mid_year >= 301,mid_year < 300,131,62,69,228,14,214,TRUE,TRUE,ok
+train_post300_test_200_300,mid_year >= 301,200 <= mid_year <= 300,131,62,69,25,11,14,TRUE,TRUE,ok
+train_pre200_test_200_300,mid_year <= 199,200 <= mid_year <= 300,206,3,203,25,11,14,FALSE,TRUE,train_set_needs_at_least_16_per_class_for_stable_crossfit
+train_200_300_test_post300,200 <= mid_year <= 300,mid_year >= 301,25,11,14,131,62,69,FALSE,TRUE,train_set_needs_at_least_16_per_class_for_stable_crossfit
+train_200_300_test_pre200,200 <= mid_year <= 300,mid_year <= 199,25,11,14,206,3,203,FALSE,TRUE,train_set_needs_at_least_16_per_class_for_stable_crossfit

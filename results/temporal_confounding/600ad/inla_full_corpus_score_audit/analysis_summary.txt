@@ -3,6 +3,6 @@ Full-corpus score modelling summary
 Latin BERT: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=325.87 [large]; creator gain=133.71 [large]
 LightGBM: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=403.92 [large]; creator gain=349.34 [large]
 NB: flipped=FALSE; best=Source + creator; main=Source + RW2 date + creator; date gain=320.7 [large]; creator gain=420.01 [large]
-Elastic net: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=338.96 [large]; creator gain=302.73 [large]
+Elastic net: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=338.96 [large]; creator gain=302.74 [large]
 SVM: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=462.44 [large]; creator gain=357.88 [large]
 XGBoost: flipped=FALSE; best=Source + RW2 date + creator; main=Source + RW2 date + creator; date gain=400.35 [large]; creator gain=350.74 [large]

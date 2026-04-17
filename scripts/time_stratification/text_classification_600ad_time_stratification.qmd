@@ -1,0 +1,1040 @@
+```{r}
+
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(quanteda)
+  library(quanteda.textmodels)
+  library(glmnet)
+  library(LiblineaR)
+  library(xgboost)
+  library(lightgbm)
+  library(Matrix)
+  library(pROC)
+})
+
+set.seed(123)
+
+data_path    <- "../../data/processed_texts/600ad"
+base_results <- "../../results/predictions/non_transformer_lemmatized/600ad"
+results_path <- file.path(base_results, "time_stratified_temporal_blocks")
+dir.create(results_path, recursive = TRUE, showWarnings = FALSE)
+
+hyper_candidates <- c(
+  file.path(base_results, "model_hyperparameters_full.csv"),
+  file.path(base_results, "model_hyperparameters_full(9).csv"),
+  "model_hyperparameters_full.csv",
+  "model_hyperparameters_full(9).csv"
+)
+hyper_path <- hyper_candidates[file.exists(hyper_candidates)][1]
+if (is.na(hyper_path)) stop("Could not find model_hyperparameters_full.csv")
+
+min_docfreq <- 3L
+max_calibration_folds <- 5L
+min_calibration_rows <- 10L
+min_train_per_class <- 10L
+min_glmnet_class <- 8L
+min_bundle_per_class <- max(min_train_per_class, 2L * min_glmnet_class)
+run_pairwise_block_transfer <- FALSE
+
+ensure_dir <- function(path) {
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  invisible(path)
+}
+
+safe_prob <- function(p, eps = 1e-15) pmin(pmax(as.numeric(p), eps), 1 - eps)
+safe_logit <- function(p, eps = 1e-15) qlogis(safe_prob(p, eps))
+
+parse_historical_year <- function(x) {
+  if (inherits(x, c("numeric", "integer"))) return(as.numeric(x))
+  x_chr <- trimws(as.character(x))
+  out <- suppressWarnings(readr::parse_number(x_chr))
+  is_bce <- stringr::str_detect(stringr::str_to_lower(x_chr), "\\b(bce|bc)\\b")
+  out[is_bce & !is.na(out)] <- -abs(out[is_bce & !is.na(out)])
+  out
+}
+
+detect_date_columns <- function(df) {
+  required <- c("date_range_start", "date_range_end")
+  missing <- setdiff(required, names(df))
+  if (length(missing) > 0) {
+    stop(
+      paste0(
+        "Missing required date columns: ",
+        paste(missing, collapse = ", "),
+        ". Available columns are: ",
+        paste(names(df), collapse = ", ")
+      )
+    )
+  }
+  list(start_col = "date_range_start", end_col = "date_range_end", mode = "interval")
+}
+
+year_to_century_index <- function(y) {
+  out <- rep(NA_integer_, length(y))
+  pos <- !is.na(y) & y >= 1
+  neg <- !is.na(y) & y <= -1
+  zer <- !is.na(y) & y == 0
+  out[pos] <- ((as.integer(y[pos]) - 1L) %/% 100L) + 1L
+  out[neg] <- -(((abs(as.integer(y[neg])) - 1L) %/% 100L) + 1L)
+  out[zer] <- 1L
+  out
+}
+
+century_label <- function(idx) {
+  vapply(idx, function(z) {
+    if (is.na(z)) return(NA_character_)
+    if (z > 0) paste0(z, "c_CE")
+    else paste0(abs(z), "c_BCE")
+  }, character(1))
+}
+
+
+make_period_label <- function(idx_vec) {
+  idx_vec <- sort(unique(idx_vec))
+  labs <- century_label(idx_vec)
+  if (length(labs) == 1) labs else paste0(labs[1], "__to__", labs[length(labs)])
+}
+
+build_temporal_blocks <- function(lab, min_per_class = min_train_per_class) {
+  counts <- lab %>%
+    count(century_index, century, manual_label, name = "n") %>%
+    tidyr::pivot_wider(names_from = manual_label, values_from = n, values_fill = 0) %>%
+    arrange(century_index)
+
+  if (nrow(counts) == 0) stop("No dated labeled rows available for temporal blocking.")
+
+  blocks <- list()
+  cur_idx <- integer(0)
+  cur_labs <- character(0)
+  cur_pos <- 0L
+  cur_neg <- 0L
+
+  flush_block <- function() {
+    tibble(
+      century_index = cur_idx,
+      century = cur_labs
+    )
+  }
+
+  for (i in seq_len(nrow(counts))) {
+    cur_idx <- c(cur_idx, counts$century_index[i])
+    cur_labs <- c(cur_labs, counts$century[i])
+    cur_pos <- cur_pos + counts$christian[i]
+    cur_neg <- cur_neg + counts$non_christian[i]
+    if (cur_pos >= min_per_class && cur_neg >= min_per_class) {
+      blocks[[length(blocks) + 1L]] <- flush_block()
+      cur_idx <- integer(0)
+      cur_labs <- character(0)
+      cur_pos <- 0L
+      cur_neg <- 0L
+    }
+  }
+
+  if (length(cur_idx) > 0) {
+    if (length(blocks) == 0) {
+      blocks[[1L]] <- flush_block()
+    } else {
+      blocks[[length(blocks)]] <- bind_rows(blocks[[length(blocks)]], flush_block())
+    }
+  }
+
+  block_map <- purrr::imap_dfr(blocks, function(df_block, i) {
+    idx_vec <- df_block$century_index
+    tibble(
+      century_index = idx_vec,
+      century = df_block$century,
+      time_block = i,
+      time_block_label = make_period_label(idx_vec)
+    )
+  })
+
+  block_counts <- lab %>%
+    inner_join(block_map, by = c("century_index", "century")) %>%
+    count(time_block, time_block_label, manual_label, name = "n") %>%
+    tidyr::pivot_wider(names_from = manual_label, values_from = n, values_fill = 0) %>%
+    arrange(time_block)
+
+  list(map = block_map, counts = block_counts)
+}
+
+
+check_binary_y <- function(y, where = "") {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) {
+    stop(paste0("Both classes are required", if (nzchar(where)) paste0(" in ", where) else "", "."))
+  }
+  invisible(tb)
+}
+
+choose_calibration_k <- function(y, max_k = max_calibration_folds, min_train_class = min_glmnet_class) {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) return(NA_integer_)
+  n_min <- min(tb)
+  candidates <- seq.int(2L, max_k)
+  ok <- candidates[vapply(candidates, function(k) {
+    n_min - ceiling(n_min / k) >= min_train_class
+  }, logical(1))]
+  if (length(ok) == 0) return(NA_integer_)
+  max(ok)
+}
+
+make_folds <- function(y, k = max_calibration_folds, seed = 123) {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) {
+    stop("Both classes are required for cross-fitting.")
+  }
+  k_use <- choose_calibration_k(y, max_k = k, min_train_class = min_glmnet_class)
+  if (!is.finite(k_use)) stop("Not enough observations per class for stable cross-fitting.")
+  set.seed(seed)
+  idx_pos <- sample(which(y == "christian"))
+  idx_neg <- sample(which(y == "non_christian"))
+  folds <- vector("list", k_use)
+  for (i in seq_len(k_use)) folds[[i]] <- integer(0)
+  for (i in seq_along(idx_pos)) folds[[((i - 1) %% k_use) + 1]] <- c(folds[[((i - 1) %% k_use) + 1]], idx_pos[i])
+  for (i in seq_along(idx_neg)) folds[[((i - 1) %% k_use) + 1]] <- c(folds[[((i - 1) %% k_use) + 1]], idx_neg[i])
+  folds
+}
+
+auc_safe <- function(y, p) {
+  p <- safe_prob(p)
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = p,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+log_loss_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  -mean(y01 * log(p) + (1 - y01) * log(1 - p))
+}
+
+brier_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  mean((y01 - p)^2)
+}
+
+hard_metrics <- function(y, pred_label) {
+  y01 <- as.integer(y == "christian")
+  p01 <- as.integer(pred_label == "christian")
+  tp <- sum(y01 == 1 & p01 == 1)
+  tn <- sum(y01 == 0 & p01 == 0)
+  fp <- sum(y01 == 0 & p01 == 1)
+  fn <- sum(y01 == 1 & p01 == 0)
+  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
+  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
+  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else 2 * precision * recall / (precision + recall)
+  bal_acc <- mean(c(recall, specificity), na.rm = TRUE)
+  mcc_den <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  mcc <- if (mcc_den == 0) NA_real_ else ((tp * tn) - (fp * fn)) / mcc_den
+  tibble(
+    accuracy = (tp + tn) / length(y),
+    balanced_accuracy = bal_acc,
+    precision = precision,
+    recall = recall,
+    specificity = specificity,
+    f1 = f1,
+    mcc = mcc,
+    tp = tp,
+    tn = tn,
+    fp = fp,
+    fn = fn
+  )
+}
+
+choose_threshold <- function(y, p, metric = c("youden", "f1")) {
+  metric <- match.arg(metric)
+  p <- safe_prob(p)
+  if (metric == "youden") {
+    th <- tryCatch(
+      pROC::coords(
+        pROC::roc(
+          response = y,
+          predictor = p,
+          levels = c("non_christian", "christian"),
+          direction = "<",
+          quiet = TRUE
+        ),
+        x = "best",
+        input = "threshold",
+        best.method = "youden",
+        ret = "threshold",
+        transpose = FALSE
+      )[[1]],
+      error = function(e) NA_real_
+    )
+    if (!is.finite(th)) 0.5 else as.numeric(th)
+  } else {
+    y01 <- as.integer(y == "christian")
+    cand <- unique(c(0, sort(unique(p)), 0.5, 1))
+    f1s <- vapply(cand, function(th) {
+      pred01 <- as.integer(p >= th)
+      tp <- sum(pred01 == 1 & y01 == 1)
+      fp <- sum(pred01 == 1 & y01 == 0)
+      fn <- sum(pred01 == 0 & y01 == 1)
+      den <- 2 * tp + fp + fn
+      if (den == 0) 0 else 2 * tp / den
+    }, numeric(1))
+    cand[which.max(f1s)]
+  }
+}
+
+fit_platt <- function(scores, y) {
+  z <- tibble(score = as.numeric(scores), y = as.integer(y == "christian")) %>% filter(is.finite(score))
+  if (nrow(z) < min_calibration_rows || length(unique(z$score)) < 2 || length(unique(z$y)) < 2) return(NULL)
+  suppressWarnings(
+    tryCatch({
+      fit <- glm(y ~ score, data = z, family = binomial(), control = glm.control(maxit = 200))
+      b <- coef(fit)[["score"]]
+      if (!is.finite(b) || b < 0 || abs(b) > 50) return(NULL)
+      fit
+    }, error = function(e) NULL)
+  )
+}
+
+apply_platt <- function(platt, scores) {
+  scores <- as.numeric(scores)
+  if (is.null(platt)) {
+    z <- as.numeric(scale(scores))
+    z[!is.finite(z)] <- 0
+    safe_prob(plogis(z))
+  } else {
+    safe_prob(predict(platt, newdata = data.frame(score = scores), type = "response"))
+  }
+}
+
+make_counts_dfm <- function(text_data, stop_list) {
+  quanteda::tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
+    quanteda::tokens_remove(pattern = stop_list) %>%
+    quanteda::dfm()
+}
+
+fit_vectorizer <- function(text_data, stop_list, min_df = min_docfreq) {
+  x <- make_counts_dfm(text_data, stop_list)
+  if (min_df > 1L) x <- quanteda::dfm_trim(x, min_docfreq = min_df, docfreq_type = "count")
+  if (quanteda::nfeat(x) == 0) stop("No features remain after filtering.")
+  N <- quanteda::ndoc(x)
+  n_k <- quanteda::docfreq(x, scheme = "count")
+  idf <- log((N + 1) / (n_k + 1)) + 1
+  list(features = quanteda::featnames(x), idf = idf, min_df = min_df)
+}
+
+transform_counts_dfm <- function(text_data, vec, stop_list) {
+  x <- make_counts_dfm(text_data, stop_list)
+  quanteda::dfm_match(x, features = vec$features)
+}
+
+transform_tfidf_sparse <- function(text_data, vec, stop_list) {
+  x_counts <- transform_counts_dfm(text_data, vec, stop_list)
+  x_mat <- as(x_counts, "dgCMatrix")
+  x_vals <- x_mat@x
+  x_mat@x <- 1 + log(x_vals)
+  idf_vec <- vec$idf[match(colnames(x_mat), names(vec$idf))]
+  idf_vec[is.na(idf_vec)] <- 0
+  x_tfidf <- x_mat %*% Matrix::Diagonal(x = idf_vec)
+  colnames(x_tfidf) <- colnames(x_mat)
+  row_norms <- sqrt(Matrix::rowSums(x_tfidf^2))
+  row_norms[row_norms == 0] <- 1
+  x_tfidf <- x_tfidf / row_norms
+  Matrix::drop0(x_tfidf)
+}
+
+prepare_features <- function(train_text, test_text, stop_list) {
+  vec <- fit_vectorizer(train_text, stop_list)
+  list(
+    vec = vec,
+    x_train_dfm = transform_counts_dfm(train_text, vec, stop_list),
+    x_test_dfm  = transform_counts_dfm(test_text, vec, stop_list),
+    x_train     = transform_tfidf_sparse(train_text, vec, stop_list),
+    x_test      = transform_tfidf_sparse(test_text, vec, stop_list)
+  )
+}
+
+svm_to_matrix <- function(x) {
+  if (inherits(x, "matrix")) return(x)
+  if (inherits(x, c("dgCMatrix", "dsCMatrix", "CsparseMatrix", "RsparseMatrix", "sparseMatrix", "Matrix"))) return(x)
+  as.matrix(x)
+}
+
+read_hyper_table <- function(path) {
+  readr::read_csv(path, show_col_types = FALSE)
+}
+
+get_hparam_row <- function(tbl, aliases) {
+  row <- tbl %>% filter(model %in% aliases) %>% slice(1)
+  if (nrow(row) == 0) stop(paste0("Missing hyperparameter row for: ", paste(aliases, collapse = ", ")))
+  row
+}
+
+hyper_tbl <- read_hyper_table(hyper_path)
+hp_nb   <- get_hparam_row(hyper_tbl, c("naive_bayes"))
+hp_svm  <- get_hparam_row(hyper_tbl, c("svm_platt"))
+hp_xgb  <- get_hparam_row(hyper_tbl, c("xgboost"))
+hp_lgb  <- get_hparam_row(hyper_tbl, c("lightgbm"))
+
+model_names <- c("naive_bayes", "elastic_net", "svm_platt", "xgboost", "lightgbm")
+enet_alpha_grid <- c(0, 0.05, 0.10, 0.25, 0.50, 0.75, 1.00)
+
+make_class_weights <- function(y) {
+  tb <- table(y)
+  n <- length(y)
+  w <- ifelse(
+    y == "christian",
+    n / (2 * unname(tb["christian"])),
+    n / (2 * unname(tb["non_christian"]))
+  )
+  as.numeric(w)
+}
+
+folds_to_foldid <- function(folds, n) {
+  foldid <- integer(n)
+  for (i in seq_along(folds)) foldid[folds[[i]]] <- i
+  foldid
+}
+
+preval_to_prob <- function(z) {
+  z <- as.numeric(z)
+  keep <- is.finite(z)
+  if (!any(keep)) return(rep(NA_real_, length(z)))
+  if (all(z[keep] >= 0 & z[keep] <= 1)) return(safe_prob(z))
+  safe_prob(plogis(z))
+}
+
+tune_glmnet_fit <- function(x, y, seed = 123, alpha_grid = enet_alpha_grid) {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) {
+    stop("Elastic net tuning requires both classes.")
+  }
+  if (min(tb) < min_glmnet_class) {
+    stop("Elastic net requires at least 8 observations in the minority class.")
+  }
+
+  k_use <- choose_calibration_k(y, max_k = max_calibration_folds, min_train_class = min_glmnet_class)
+  if (!is.finite(k_use)) stop("Not enough observations per class for elastic-net tuning.")
+
+  folds <- make_folds(y, k = k_use, seed = seed)
+  foldid <- folds_to_foldid(folds, length(y))
+  y01 <- as.integer(y == "christian")
+  w <- make_class_weights(y)
+
+  candidates <- vector("list", length(alpha_grid) * 2L)
+  idx <- 1L
+
+  for (alpha_use in alpha_grid) {
+    cvfit <- tryCatch(
+      glmnet::cv.glmnet(
+        x = x,
+        y = y01,
+        family = "binomial",
+        alpha = alpha_use,
+        foldid = foldid,
+        type.measure = "auc",
+        weights = w,
+        standardize = TRUE,
+        keep = TRUE,
+        maxit = 1e6
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(cvfit)) next
+
+    for (rule in c("lambda.min", "lambda.1se")) {
+      lam <- cvfit[[rule]]
+      if (!is.finite(lam)) next
+      lam_idx <- match(lam, cvfit$lambda)
+      if (is.na(lam_idx)) lam_idx <- which.min(abs(cvfit$lambda - lam))
+      if (length(lam_idx) != 1 || !is.finite(lam_idx)) next
+
+      preval <- cvfit$fit.preval[, lam_idx]
+      p <- preval_to_prob(preval)
+      if (!all(is.finite(p))) next
+
+      candidates[[idx]] <- tibble(
+        alpha = alpha_use,
+        lambda = lam,
+        lambda_rule = rule,
+        auc = auc_safe(y, p),
+        log_loss = log_loss_safe(y, p),
+        brier = brier_safe(y, p)
+      )
+      idx <- idx + 1L
+    }
+  }
+
+  candidates <- bind_rows(candidates)
+  if (nrow(candidates) == 0) stop("Elastic-net tuning failed to produce any valid candidates.")
+
+  best <- candidates %>%
+    arrange(desc(auc), log_loss, brier, desc(alpha), lambda) %>%
+    slice(1)
+
+  fit <- glmnet::glmnet(
+    x = x,
+    y = y01,
+    family = "binomial",
+    alpha = best$alpha,
+    lambda = best$lambda,
+    weights = w,
+    standardize = TRUE,
+    maxit = 1e6
+  )
+
+  list(
+    fit = fit,
+    alpha = best$alpha,
+    lambda = best$lambda,
+    lambda_rule = best$lambda_rule,
+    cv_auc = best$auc,
+    cv_log_loss = best$log_loss,
+    cv_brier = best$brier
+  )
+}
+
+fit_model_from_features <- function(model_name, feats, y_train, seed = 123) {
+  if (model_name == "naive_bayes") {
+    fit <- quanteda.textmodels::textmodel_nb(feats$x_train_dfm, y_train)
+    return(list(model_name = model_name, fit = fit, vec = feats$vec))
+  }
+  if (model_name == "elastic_net") {
+    tuned <- tune_glmnet_fit(feats$x_train, y_train, seed = seed)
+    return(list(
+      model_name = model_name,
+      fit = tuned$fit,
+      vec = feats$vec,
+      tuned_alpha = tuned$alpha,
+      tuned_lambda = tuned$lambda,
+      tuned_lambda_rule = tuned$lambda_rule,
+      tuned_cv_auc = tuned$cv_auc,
+      tuned_cv_log_loss = tuned$cv_log_loss,
+      tuned_cv_brier = tuned$cv_brier
+    ))
+  }
+  if (model_name == "svm_platt") {
+    x_use <- svm_to_matrix(feats$x_train)
+    fit <- suppressWarnings(LiblineaR::LiblineaR(data = x_use, target = y_train, type = 7, cost = hp_svm$cost[1]))
+    raw <- as.numeric(suppressWarnings(predict(fit, x_use, decisionValues = TRUE))$decisionValues[, 1])
+    sgn <- if (mean(raw[y_train == "christian"]) >= mean(raw[y_train == "non_christian"])) 1 else -1
+    return(list(model_name = model_name, fit = fit, sign = sgn, vec = feats$vec))
+  }
+  if (model_name == "xgboost") {
+    spw <- sum(y_train == "non_christian") / max(sum(y_train == "christian"), 1)
+    pars <- list(
+      booster = "gbtree",
+      objective = "binary:logistic",
+      eval_metric = "logloss",
+      tree_method = "hist",
+      eta = hp_xgb$eta[1],
+      max_depth = as.integer(hp_xgb$max_depth[1]),
+      min_child_weight = hp_xgb$min_child_weight[1],
+      subsample = hp_xgb$subsample[1],
+      colsample_bytree = hp_xgb$colsample_bytree[1],
+      gamma = hp_xgb$gamma[1],
+      scale_pos_weight = spw
+    )
+    if (!is.null(seed)) set.seed(seed)
+    fit <- xgboost::xgb.train(
+      params = pars,
+      data = xgboost::xgb.DMatrix(feats$x_train, label = as.integer(y_train == "christian")),
+      nrounds = as.integer(hp_xgb$best_nrounds[1]),
+      verbose = 0
+    )
+    return(list(model_name = model_name, fit = fit, vec = feats$vec))
+  }
+  if (model_name == "lightgbm") {
+    pars <- list(
+      objective = "binary",
+      metric = "binary_logloss",
+      boosting = "gbdt",
+      learning_rate = hp_lgb$learning_rate[1],
+      num_leaves = as.integer(hp_lgb$num_leaves[1]),
+      min_data_in_leaf = as.integer(hp_lgb$min_data_in_leaf[1]),
+      feature_fraction = hp_lgb$feature_fraction[1],
+      bagging_fraction = hp_lgb$bagging_fraction[1],
+      bagging_freq = 1L,
+      is_unbalance = TRUE,
+      first_metric_only = TRUE,
+      seed = seed,
+      feature_fraction_seed = seed,
+      bagging_seed = seed,
+      verbosity = -1
+    )
+    dtrain <- lightgbm::lgb.Dataset(
+      data = feats$x_train,
+      label = as.integer(y_train == "christian"),
+      params = list(feature_pre_filter = FALSE),
+      free_raw_data = TRUE
+    )
+    fit <- lightgbm::lgb.train(
+      params = pars,
+      data = dtrain,
+      nrounds = as.integer(hp_lgb$best_nrounds[1]),
+      verbose = -1
+    )
+    return(list(model_name = model_name, fit = fit, vec = feats$vec, nrounds = as.integer(hp_lgb$best_nrounds[1])))
+  }
+  stop("Unknown model")
+}
+
+predict_model_score <- function(bundle, new_text, stop_list) {
+  if (bundle$model_name == "naive_bayes") {
+    x_new <- transform_counts_dfm(new_text, bundle$vec, stop_list)
+    p <- predict(bundle$fit, newdata = x_new, type = "probability")
+    p_ch <- if ("christian" %in% colnames(p)) p[, "christian"] else p[, ncol(p)]
+    return(safe_logit(p_ch))
+  }
+  if (bundle$model_name == "elastic_net") {
+    x_new <- transform_tfidf_sparse(new_text, bundle$vec, stop_list)
+    return(as.numeric(predict(bundle$fit, newx = x_new, type = "link")))
+  }
+  if (bundle$model_name == "svm_platt") {
+    x_new <- transform_tfidf_sparse(new_text, bundle$vec, stop_list)
+    raw <- suppressWarnings(predict(bundle$fit, svm_to_matrix(x_new), decisionValues = TRUE))$decisionValues[, 1]
+    return(bundle$sign * as.numeric(raw))
+  }
+  if (bundle$model_name == "xgboost") {
+    x_new <- transform_tfidf_sparse(new_text, bundle$vec, stop_list)
+    return(as.numeric(predict(bundle$fit, xgboost::xgb.DMatrix(x_new), outputmargin = TRUE)))
+  }
+  if (bundle$model_name == "lightgbm") {
+    x_new <- transform_tfidf_sparse(new_text, bundle$vec, stop_list)
+    out <- tryCatch(
+      predict(bundle$fit, x_new, num_iteration = bundle$nrounds, type = "raw"),
+      error = function(e) tryCatch(
+        predict(bundle$fit, x_new, num_iteration = bundle$nrounds, rawscore = TRUE),
+        error = function(e2) {
+          p <- safe_prob(as.numeric(predict(bundle$fit, x_new, num_iteration = bundle$nrounds)))
+          qlogis(p)
+        }
+      )
+    )
+    return(as.numeric(out))
+  }
+  stop("Unknown model")
+}
+
+crossfit_scores <- function(model_name, text, y, stop_list, seed = 123) {
+  folds <- make_folds(y, max_calibration_folds, seed)
+  out <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    feats <- prepare_features(text[tr], text[va], stop_list)
+    bundle <- fit_model_from_features(model_name, feats, y[tr], seed = seed + j)
+    out[va] <- predict_model_score(bundle, text[va], stop_list)
+  }
+  out
+}
+
+build_bundle <- function(model_name, train_df, stop_list, seed = 123) {
+  y <- train_df$manual_label
+  tb <- table(y)
+  if (!all(c("christian","non_christian") %in% names(tb))) return(NULL)
+  if (any(tb < min_bundle_per_class)) return(NULL)
+
+  cf_scores <- tryCatch(
+    crossfit_scores(model_name, train_df$text, y, stop_list, seed = seed),
+    error = function(e) NULL
+  )
+  if (is.null(cf_scores)) return(NULL)
+
+  platt <- fit_platt(cf_scores, y)
+  cf_prob <- apply_platt(platt, cf_scores)
+  th_y <- choose_threshold(y, cf_prob, "youden")
+  th_f <- choose_threshold(y, cf_prob, "f1")
+
+  feats_full <- prepare_features(train_df$text, train_df$text, stop_list)
+  fit_full <- fit_model_from_features(model_name, feats_full, y, seed = seed + 999)
+
+  list(
+    model_name = model_name,
+    fit = fit_full$fit,
+    vec = fit_full$vec,
+    sign = fit_full$sign %||% NULL,
+    nrounds = fit_full$nrounds %||% NULL,
+    tuned_alpha = fit_full$tuned_alpha %||% NA_real_,
+    tuned_lambda = fit_full$tuned_lambda %||% NA_real_,
+    tuned_lambda_rule = fit_full$tuned_lambda_rule %||% NA_character_,
+    tuned_cv_auc = fit_full$tuned_cv_auc %||% NA_real_,
+    tuned_cv_log_loss = fit_full$tuned_cv_log_loss %||% NA_real_,
+    tuned_cv_brier = fit_full$tuned_cv_brier %||% NA_real_,
+    platt = platt,
+    threshold_youden = th_y,
+    threshold_f1 = th_f,
+    train_scores_cf = cf_scores,
+    train_prob_cf = cf_prob,
+    train_n = nrow(train_df),
+    train_pos = sum(y == "christian"),
+    train_neg = sum(y == "non_christian")
+  )
+}
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+score_bundle <- function(bundle, test_df, stop_list) {
+  raw <- predict_model_score(bundle, test_df$text, stop_list)
+  prob <- apply_platt(bundle$platt, raw)
+  pred_y <- ifelse(prob >= bundle$threshold_youden, "christian", "non_christian")
+  pred_f <- ifelse(prob >= bundle$threshold_f1, "christian", "non_christian")
+  list(raw = raw, prob = prob, pred_y = pred_y, pred_f = pred_f)
+}
+
+summarize_split <- function(split_type, train_label, test_label, train_df, test_df, model_name, scored, bundle = NULL) {
+  hy <- hard_metrics(test_df$manual_label, scored$pred_y)
+  hf <- hard_metrics(test_df$manual_label, scored$pred_f)
+  tibble(
+    split_type = split_type,
+    train_period = train_label,
+    test_period = test_label,
+    model = model_name,
+    tuned_alpha = if (is.null(bundle)) NA_real_ else bundle$tuned_alpha %||% NA_real_,
+    tuned_lambda = if (is.null(bundle)) NA_real_ else bundle$tuned_lambda %||% NA_real_,
+    tuned_lambda_rule = if (is.null(bundle)) NA_character_ else bundle$tuned_lambda_rule %||% NA_character_,
+    tuned_cv_auc = if (is.null(bundle)) NA_real_ else bundle$tuned_cv_auc %||% NA_real_,
+    tuned_cv_log_loss = if (is.null(bundle)) NA_real_ else bundle$tuned_cv_log_loss %||% NA_real_,
+    tuned_cv_brier = if (is.null(bundle)) NA_real_ else bundle$tuned_cv_brier %||% NA_real_,
+    train_n = nrow(train_df),
+    train_pos = sum(train_df$manual_label == "christian"),
+    train_neg = sum(train_df$manual_label == "non_christian"),
+    test_n = nrow(test_df),
+    test_pos = sum(test_df$manual_label == "christian"),
+    test_neg = sum(test_df$manual_label == "non_christian"),
+    auc = auc_safe(test_df$manual_label, scored$prob),
+    log_loss = log_loss_safe(test_df$manual_label, scored$prob),
+    brier = brier_safe(test_df$manual_label, scored$prob),
+    accuracy_youden = hy$accuracy,
+    balanced_accuracy_youden = hy$balanced_accuracy,
+    precision_youden = hy$precision,
+    recall_youden = hy$recall,
+    specificity_youden = hy$specificity,
+    f1_youden = hy$f1,
+    mcc_youden = hy$mcc,
+    accuracy_f1 = hf$accuracy,
+    balanced_accuracy_f1 = hf$balanced_accuracy,
+    precision_f1 = hf$precision,
+    recall_f1 = hf$recall,
+    specificity_f1 = hf$specificity,
+    f1_f1 = hf$f1,
+    mcc_f1 = hf$mcc
+  )
+}
+
+
+empty_metric_tbl <- function() {
+  tibble(
+    split_type = character(),
+    train_period = character(),
+    test_period = character(),
+    model = character(),
+    tuned_alpha = numeric(),
+    tuned_lambda = numeric(),
+    tuned_lambda_rule = character(),
+    tuned_cv_auc = numeric(),
+    tuned_cv_log_loss = numeric(),
+    tuned_cv_brier = numeric(),
+    train_n = integer(),
+    train_pos = integer(),
+    train_neg = integer(),
+    test_n = integer(),
+    test_pos = integer(),
+    test_neg = integer(),
+    auc = numeric(),
+    log_loss = numeric(),
+    brier = numeric(),
+    accuracy_youden = numeric(),
+    balanced_accuracy_youden = numeric(),
+    precision_youden = numeric(),
+    recall_youden = numeric(),
+    specificity_youden = numeric(),
+    f1_youden = numeric(),
+    mcc_youden = numeric(),
+    accuracy_f1 = numeric(),
+    balanced_accuracy_f1 = numeric(),
+    precision_f1 = numeric(),
+    recall_f1 = numeric(),
+    specificity_f1 = numeric(),
+    f1_f1 = numeric(),
+    mcc_f1 = numeric()
+  )
+}
+
+empty_summary_tbl <- function() {
+  tibble(
+    model = character(),
+    n_splits = integer(),
+    mean_auc = numeric(),
+    mean_log_loss = numeric(),
+    mean_brier = numeric(),
+    mean_bal_acc_youden = numeric(),
+    mean_f1_youden = numeric(),
+    mean_mcc_youden = numeric()
+  )
+}
+
+summarise_metrics <- function(df) {
+  if (is.null(df) || nrow(df) == 0 || !"model" %in% names(df)) return(empty_summary_tbl())
+  df %>%
+    group_by(model) %>%
+    summarise(
+      n_splits = n(),
+      mean_auc = mean(auc, na.rm = TRUE),
+      mean_log_loss = mean(log_loss, na.rm = TRUE),
+      mean_brier = mean(brier, na.rm = TRUE),
+      mean_bal_acc_youden = mean(balanced_accuracy_youden, na.rm = TRUE),
+      mean_f1_youden = mean(f1_youden, na.rm = TRUE),
+      mean_mcc_youden = mean(mcc_youden, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(mean_auc))
+}
+
+custom_additions <- c("m", "c", "l", "d", "gt", "lt", "br", "href", "fridericus", "heinricus", "conradus", "meus", "tuus")
+stops_v1 <- scan("../../data/stopwords/stopwords_latin1.txt", what = "character", quiet = TRUE, encoding = "UTF-8")
+stops_v2 <- scan("../../data/stopwords/stopwords_latin2.txt", what = "character", comment.char = "#", quiet = TRUE, encoding = "UTF-8")
+latin_stops <- sort(unique(c(stops_v1, stops_v2, custom_additions)))
+latin_stops <- latin_stops[latin_stops != "*"]
+
+df <- readr::read_csv(file.path(data_path, "corpus_600ad.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(!is.na(text) & text != "") %>%
+  mutate(row_id = row_number())
+
+labels <- readr::read_csv(file.path(data_path, "corpus_600ad_labeled.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(label %in% c("christian", "non_christian")) %>%
+  transmute(id, manual_label = label) %>%
+  distinct(id, .keep_all = TRUE)
+
+lab <- df %>%
+  inner_join(labels, by = "id") %>%
+  arrange(row_id)
+
+date_cols <- detect_date_columns(lab)
+lab <- lab %>%
+  mutate(
+    start_year = parse_historical_year(.data[[date_cols$start_col]]),
+    end_year   = parse_historical_year(.data[[date_cols$end_col]])
+  ) %>%
+  mutate(
+    start_year0 = start_year,
+    end_year0 = end_year,
+    start_year = dplyr::if_else(
+      !is.na(start_year0) & !is.na(end_year0),
+      pmin(start_year0, end_year0),
+      start_year0
+    ),
+    end_year = dplyr::if_else(
+      !is.na(start_year0) & !is.na(end_year0),
+      pmax(start_year0, end_year0),
+      end_year0
+    )
+  ) %>%
+  select(-start_year0, -end_year0) %>%
+  mutate(
+    mid_year = if_else(!is.na(start_year) & !is.na(end_year), (start_year + end_year) / 2, NA_real_),
+    century_index = year_to_century_index(mid_year),
+    century = century_label(century_index)
+  ) %>%
+  filter(!is.na(century_index))
+
+if (nrow(lab) == 0) stop("No labeled rows have usable dates after century assignment.")
+
+readr::write_csv(
+  lab %>% select(id, row_id, manual_label, all_of(c(date_cols$start_col, date_cols$end_col)), start_year, end_year, mid_year, century_index, century),
+  file.path(results_path, "labeled_century_assignment.csv")
+)
+readr::write_csv(hyper_tbl, file.path(results_path, "hyperparameters_used.csv"))
+
+
+century_counts <- lab %>%
+  count(century_index, century, manual_label, name = "n") %>%
+  arrange(century_index, manual_label)
+readr::write_csv(century_counts, file.path(results_path, "century_label_counts.csv"))
+
+block_info <- build_temporal_blocks(lab, min_per_class = min_bundle_per_class)
+block_map <- block_info$map
+block_counts <- block_info$counts
+
+lab <- lab %>%
+  inner_join(block_map, by = c("century_index", "century"))
+
+readr::write_csv(block_counts, file.path(results_path, "temporal_block_label_counts.csv"))
+readr::write_csv(
+  lab %>%
+    select(
+      id, row_id, manual_label,
+      all_of(c(date_cols$start_col, date_cols$end_col)),
+      start_year, end_year, mid_year,
+      century_index, century,
+      time_block, time_block_label
+    ),
+  file.path(results_path, "labeled_temporal_block_assignment.csv")
+)
+
+usable_blocks <- block_counts %>%
+  mutate(trainable = christian >= min_bundle_per_class & non_christian >= min_bundle_per_class)
+
+if (nrow(usable_blocks) < 2) {
+  stop("Temporal blocking produced fewer than two usable blocks. Lower min_train_per_class or broaden the date bins further.")
+}
+
+pairwise_metrics <- empty_metric_tbl()
+if (isTRUE(run_pairwise_block_transfer)) {
+pairwise_bundles <- list()
+for (i in seq_len(nrow(usable_blocks))) {
+  if (!usable_blocks$trainable[i]) next
+  b <- usable_blocks$time_block[i]
+  bkey <- as.character(b)
+  train_df <- lab %>% filter(time_block == b)
+  pairwise_bundles[[bkey]] <- list()
+  for (m in model_names) {
+    pairwise_bundles[[bkey]][[m]] <- build_bundle(
+      m,
+      train_df,
+      latin_stops,
+      seed = 1000 + b * 100 + match(m, model_names)
+    )
+  }
+}
+
+pairwise_rows <- list()
+k <- 1L
+for (i in seq_len(nrow(usable_blocks))) {
+  train_block <- usable_blocks$time_block[i]
+  train_key <- as.character(train_block)
+  train_lbl <- usable_blocks$time_block_label[i]
+  if (is.null(pairwise_bundles[[train_key]])) next
+  train_df <- lab %>% filter(time_block == train_block)
+  for (j in seq_len(nrow(usable_blocks))) {
+    test_block <- usable_blocks$time_block[j]
+    test_lbl <- usable_blocks$time_block_label[j]
+    if (train_block == test_block) next
+    test_df <- lab %>% filter(time_block == test_block)
+    if (nrow(test_df) == 0) next
+    for (m in model_names) {
+      bundle <- pairwise_bundles[[train_key]][[m]]
+      if (is.null(bundle)) next
+      scored <- score_bundle(bundle, test_df, latin_stops)
+      pairwise_rows[[k]] <- summarize_split("pairwise_time_block", train_lbl, test_lbl, train_df, test_df, m, scored, bundle)
+      k <- k + 1L
+    }
+  }
+}
+pairwise_metrics <- if (length(pairwise_rows) == 0) empty_metric_tbl() else bind_rows(pairwise_rows)
+
+}
+
+rolling_rows <- list()
+r <- 1L
+if (nrow(usable_blocks) >= 2) {
+  for (j in 2:nrow(usable_blocks)) {
+    test_block <- usable_blocks$time_block[j]
+    test_lbl <- usable_blocks$time_block_label[j]
+    train_df <- lab %>% filter(time_block < test_block)
+    test_df  <- lab %>% filter(time_block == test_block)
+    tb <- table(train_df$manual_label)
+    if (nrow(train_df) == 0 || !all(c("christian","non_christian") %in% names(tb)) || any(tb < min_bundle_per_class)) next
+    for (m in model_names) {
+      bundle <- build_bundle(m, train_df, latin_stops, seed = 5000 + j * 100 + match(m, model_names))
+      if (is.null(bundle)) next
+      scored <- score_bundle(bundle, test_df, latin_stops)
+      rolling_rows[[r]] <- summarize_split(
+        "rolling_future_block",
+        paste0("<=_", usable_blocks$time_block_label[j - 1]),
+        test_lbl,
+        train_df,
+        test_df,
+        m,
+        scored,
+        bundle
+      )
+      r <- r + 1L
+    }
+  }
+}
+rolling_metrics <- if (length(rolling_rows) == 0) empty_metric_tbl() else bind_rows(rolling_rows)
+
+loo_rows <- list()
+u <- 1L
+if (nrow(usable_blocks) >= 3) {
+  for (j in seq_len(nrow(usable_blocks))) {
+    test_block <- usable_blocks$time_block[j]
+    test_lbl <- usable_blocks$time_block_label[j]
+    train_df <- lab %>% filter(time_block != test_block)
+    test_df  <- lab %>% filter(time_block == test_block)
+    tb <- table(train_df$manual_label)
+    if (nrow(train_df) == 0 || !all(c("christian","non_christian") %in% names(tb)) || any(tb < min_bundle_per_class)) next
+    for (m in model_names) {
+      bundle <- build_bundle(m, train_df, latin_stops, seed = 8000 + j * 100 + match(m, model_names))
+      if (is.null(bundle)) next
+      scored <- score_bundle(bundle, test_df, latin_stops)
+      loo_rows[[u]] <- summarize_split(
+        "leave_one_block_out",
+        "all_other_blocks",
+        test_lbl,
+        train_df,
+        test_df,
+        m,
+        scored,
+        bundle
+      )
+      u <- u + 1L
+    }
+  }
+}
+loo_metrics <- if (length(loo_rows) == 0) empty_metric_tbl() else bind_rows(loo_rows)
+
+pairwise_summary <- summarise_metrics(pairwise_metrics)
+
+rolling_summary <- summarise_metrics(rolling_metrics)
+
+loo_summary <- summarise_metrics(loo_metrics)
+
+if (nrow(pairwise_metrics) == 0) message("No valid pairwise time-block splits were produced.")
+readr::write_csv(pairwise_metrics, file.path(results_path, "pairwise_time_block_metrics.csv"))
+readr::write_csv(pairwise_summary, file.path(results_path, "pairwise_time_block_summary.csv"))
+if (nrow(rolling_metrics) == 0) message("No valid rolling-future splits were produced under the current block constraints.")
+readr::write_csv(rolling_metrics, file.path(results_path, "rolling_future_block_metrics.csv"))
+readr::write_csv(rolling_summary, file.path(results_path, "rolling_future_block_summary.csv"))
+if (nrow(loo_metrics) == 0) message("No valid leave-one-block-out splits were produced under the current block constraints.")
+readr::write_csv(loo_metrics, file.path(results_path, "leave_one_block_out_metrics.csv"))
+readr::write_csv(loo_summary, file.path(results_path, "leave_one_block_out_summary.csv"))
+readr::write_csv(
+  bind_rows(pairwise_metrics, rolling_metrics, loo_metrics) %>%
+    filter(model == "elastic_net") %>%
+    distinct(split_type, train_period, test_period, model, tuned_alpha, tuned_lambda, tuned_lambda_rule, tuned_cv_auc, tuned_cv_log_loss, tuned_cv_brier),
+  file.path(results_path, "elastic_net_tuning_diagnostics.csv")
+)
+
+
+cat("\nDate columns used:\n")
+cat("  start:", date_cols$start_col, "\n")
+cat("  end  :", date_cols$end_col, "\n")
+cat("\nMinimum per-class size for bundle training:", min_bundle_per_class, "\n")
+cat("Pairwise block transfer enabled:", run_pairwise_block_transfer, "\n")
+cat("\nTemporal block counts:\n")
+print(block_counts, n = Inf)
+cat("\nPairwise block summary:\n")
+print(pairwise_summary, n = Inf)
+cat("\nRolling future block summary:\n")
+print(rolling_summary, n = Inf)
+cat("\nLeave-one-block-out summary:\n")
+print(loo_summary, n = Inf)
+cat("\nElastic-net tuning diagnostics:\n")
+print(
+  bind_rows(pairwise_metrics, rolling_metrics, loo_metrics) %>%
+    filter(model == "elastic_net") %>%
+    distinct(split_type, train_period, test_period, model, tuned_alpha, tuned_lambda, tuned_lambda_rule, tuned_cv_auc, tuned_cv_log_loss, tuned_cv_brier),
+  n = Inf
+)
+
+```
+

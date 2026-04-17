@@ -1,0 +1,15 @@
+century_index,century,manual_label,n
+-3,3c_BCE,non_christian,3
+-2,2c_BCE,non_christian,33
+-1,1c_BCE,non_christian,80
+1,1c_CE,non_christian,55
+2,2c_CE,christian,4
+2,2c_CE,non_christian,33
+3,3c_CE,christian,10
+3,3c_CE,non_christian,13
+4,4c_CE,christian,13
+4,4c_CE,non_christian,37
+5,5c_CE,christian,31
+5,5c_CE,non_christian,18
+6,6c_CE,christian,18
+6,6c_CE,non_christian,14

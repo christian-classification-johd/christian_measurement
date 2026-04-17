@@ -1,0 +1,15 @@
+century_index,century,manual_label,n,prop
+-3,3c_BCE,non_christian,3,1
+-2,2c_BCE,non_christian,33,1
+-1,1c_BCE,non_christian,80,1
+1,1c_CE,non_christian,55,1
+2,2c_CE,christian,4,0.10810810810810811
+2,2c_CE,non_christian,33,0.8918918918918919
+3,3c_CE,christian,10,0.43478260869565216
+3,3c_CE,non_christian,13,0.5652173913043478
+4,4c_CE,christian,13,0.26
+4,4c_CE,non_christian,37,0.74
+5,5c_CE,christian,31,0.6326530612244898
+5,5c_CE,non_christian,18,0.3673469387755102
+6,6c_CE,christian,18,0.5625
+6,6c_CE,non_christian,14,0.4375

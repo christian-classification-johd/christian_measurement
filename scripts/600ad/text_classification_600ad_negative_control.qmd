@@ -1,0 +1,648 @@
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(quanteda)
+  library(quanteda.textmodels)
+  library(glmnet)
+  library(LiblineaR)
+  library(xgboost)
+  library(lightgbm)
+  library(Matrix)
+  library(pROC)
+  library(parallel)
+})
+
+set.seed(123)
+
+# =========================
+# knobs
+# =========================
+data_path    <- "../../data/processed_texts/600ad"
+base_results <- "../../results/predictions/non_transformer_lemmatized/600ad"
+results_path <- file.path(base_results, "negative_control_permuted_labels_fast")
+dir.create(results_path, recursive = TRUE, showWarnings = FALSE)
+
+hyper_candidates <- c(
+  file.path(base_results, "model_hyperparameters_full.csv"),
+  file.path(base_results, "model_hyperparameters_full(9).csv"),
+  "model_hyperparameters_full.csv",
+  "model_hyperparameters_full(9).csv"
+)
+hyper_path <- hyper_candidates[file.exists(hyper_candidates)][1]
+if (is.na(hyper_path)) stop("Could not find model_hyperparameters_full.csv")
+
+n_perm <- 100L
+label_modes <- c("global", "by_century")
+k_folds_outer <- 5L
+min_docfreq <- 3L
+min_glmnet_class <- 8L
+save_oof_predictions <- FALSE
+n_cores <- max(1L, parallel::detectCores() - 1L)
+
+# for a fast null check, keep the models that already emit probabilities efficiently
+run_models <- c("naive_bayes", "elastic_net", "svm_platt", "xgboost", "lightgbm")
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+safe_prob <- function(p, eps = 1e-15) pmin(pmax(as.numeric(p), eps), 1 - eps)
+safe_logit <- function(p, eps = 1e-15) qlogis(safe_prob(p, eps))
+
+empty_metrics_tbl <- function() {
+  tibble(
+    iteration = integer(),
+    label_mode = character(),
+    model = character(),
+    auc = double(),
+    log_loss = double(),
+    brier = double(),
+    accuracy_youden = double(),
+    balanced_accuracy_youden = double(),
+    precision_youden = double(),
+    recall_youden = double(),
+    specificity_youden = double(),
+    f1_youden = double(),
+    mcc_youden = double(),
+    accuracy_f1 = double(),
+    balanced_accuracy_f1 = double(),
+    precision_f1 = double(),
+    recall_f1 = double(),
+    specificity_f1 = double(),
+    f1_f1 = double(),
+    mcc_f1 = double(),
+    n = integer(),
+    n_christian = integer(),
+    n_non_christian = integer()
+  )
+}
+
+empty_log_tbl <- function() {
+  tibble(
+    iteration = integer(),
+    label_mode = character(),
+    model = character(),
+    status = character(),
+    detail = character()
+  )
+}
+
+parse_historical_year <- function(x) {
+  if (inherits(x, c("numeric", "integer"))) return(as.numeric(x))
+  x_chr <- trimws(as.character(x))
+  out <- suppressWarnings(readr::parse_number(x_chr))
+  is_bce <- stringr::str_detect(stringr::str_to_lower(x_chr), "\\b(bce|bc)\\b")
+  out[is_bce & !is.na(out)] <- -abs(out[is_bce & !is.na(out)])
+  out
+}
+
+year_to_century_index <- function(y) {
+  out <- rep(NA_integer_, length(y))
+  pos <- !is.na(y) & y >= 1
+  neg <- !is.na(y) & y <= -1
+  zer <- !is.na(y) & y == 0
+  out[pos] <- ((as.integer(y[pos]) - 1L) %/% 100L) + 1L
+  out[neg] <- -(((abs(as.integer(y[neg])) - 1L) %/% 100L) + 1L)
+  out[zer] <- 1L
+  out
+}
+
+century_label <- function(idx) {
+  vapply(idx, function(z) {
+    if (is.na(z)) return(NA_character_)
+    if (z > 0) paste0(z, "c_CE") else paste0(abs(z), "c_BCE")
+  }, character(1))
+}
+
+choose_cv_k <- function(y, max_k = 5L, min_train_class = min_glmnet_class) {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) return(NA_integer_)
+  n_min <- min(tb)
+  candidates <- seq.int(2L, max_k)
+  ok <- candidates[vapply(candidates, function(k) {
+    n_min - ceiling(n_min / k) >= min_train_class
+  }, logical(1))]
+  if (length(ok) == 0) return(NA_integer_)
+  max(ok)
+}
+
+make_folds <- function(y, k = 5L, seed = 123) {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) stop("Both classes are required.")
+  k_use <- choose_cv_k(y, max_k = k, min_train_class = min_glmnet_class)
+  if (!is.finite(k_use)) stop("Not enough minority-class observations for stable cross-validation.")
+  set.seed(seed)
+  idx_pos <- sample(which(y == "christian"))
+  idx_neg <- sample(which(y == "non_christian"))
+  folds <- vector("list", k_use)
+  for (i in seq_len(k_use)) folds[[i]] <- integer(0)
+  for (i in seq_along(idx_pos)) folds[[((i - 1) %% k_use) + 1]] <- c(folds[[((i - 1) %% k_use) + 1]], idx_pos[i])
+  for (i in seq_along(idx_neg)) folds[[((i - 1) %% k_use) + 1]] <- c(folds[[((i - 1) %% k_use) + 1]], idx_neg[i])
+  folds
+}
+
+auc_safe <- function(y, p) {
+  p <- safe_prob(p)
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = p,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+log_loss_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  -mean(y01 * log(p) + (1 - y01) * log(1 - p))
+}
+
+brier_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  mean((y01 - p)^2)
+}
+
+hard_metrics <- function(y, pred_label) {
+  y01 <- as.integer(y == "christian")
+  p01 <- as.integer(pred_label == "christian")
+  tp <- sum(y01 == 1 & p01 == 1)
+  tn <- sum(y01 == 0 & p01 == 0)
+  fp <- sum(y01 == 0 & p01 == 1)
+  fn <- sum(y01 == 1 & p01 == 0)
+  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
+  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
+  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else 2 * precision * recall / (precision + recall)
+  bal_acc <- mean(c(recall, specificity), na.rm = TRUE)
+  mcc_den <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  mcc <- if (mcc_den == 0) NA_real_ else ((tp * tn) - (fp * fn)) / mcc_den
+  tibble(
+    accuracy = (tp + tn) / length(y),
+    balanced_accuracy = bal_acc,
+    precision = precision,
+    recall = recall,
+    specificity = specificity,
+    f1 = f1,
+    mcc = mcc
+  )
+}
+
+choose_threshold <- function(y, p, metric = c("youden", "f1")) {
+  metric <- match.arg(metric)
+  p <- safe_prob(p)
+  if (metric == "youden") {
+    th <- tryCatch(
+      pROC::coords(
+        pROC::roc(
+          response = y,
+          predictor = p,
+          levels = c("non_christian", "christian"),
+          direction = "<",
+          quiet = TRUE
+        ),
+        x = "best",
+        input = "threshold",
+        best.method = "youden",
+        ret = "threshold",
+        transpose = FALSE
+      )[[1]],
+      error = function(e) NA_real_
+    )
+    if (!is.finite(th)) 0.5 else as.numeric(th)
+  } else {
+    y01 <- as.integer(y == "christian")
+    cand <- unique(c(0, sort(unique(p)), 0.5, 1))
+    f1s <- vapply(cand, function(th) {
+      pred01 <- as.integer(p >= th)
+      tp <- sum(pred01 == 1 & y01 == 1)
+      fp <- sum(pred01 == 1 & y01 == 0)
+      fn <- sum(pred01 == 0 & y01 == 1)
+      den <- 2 * tp + fp + fn
+      if (den == 0) 0 else 2 * tp / den
+    }, numeric(1))
+    cand[which.max(f1s)]
+  }
+}
+
+summarize_iteration <- function(iteration, label_mode, model_name, y, prob, pred_y, pred_f) {
+  hy <- hard_metrics(y, pred_y)
+  hf <- hard_metrics(y, pred_f)
+  tibble(
+    iteration = iteration,
+    label_mode = label_mode,
+    model = model_name,
+    auc = auc_safe(y, prob),
+    log_loss = log_loss_safe(y, prob),
+    brier = brier_safe(y, prob),
+    accuracy_youden = hy$accuracy,
+    balanced_accuracy_youden = hy$balanced_accuracy,
+    precision_youden = hy$precision,
+    recall_youden = hy$recall,
+    specificity_youden = hy$specificity,
+    f1_youden = hy$f1,
+    mcc_youden = hy$mcc,
+    accuracy_f1 = hf$accuracy,
+    balanced_accuracy_f1 = hf$balanced_accuracy,
+    precision_f1 = hf$precision,
+    recall_f1 = hf$recall,
+    specificity_f1 = hf$specificity,
+    f1_f1 = hf$f1,
+    mcc_f1 = hf$mcc,
+    n = length(y),
+    n_christian = sum(y == "christian"),
+    n_non_christian = sum(y == "non_christian")
+  )
+}
+
+summarise_metrics <- function(metrics_tbl) {
+  if (nrow(metrics_tbl) == 0) {
+    return(tibble(
+      label_mode = character(),
+      model = character(),
+      n_iterations = integer(),
+      mean_auc = double(),
+      sd_auc = double(),
+      q025_auc = double(),
+      q975_auc = double(),
+      mean_accuracy_youden = double(),
+      sd_accuracy_youden = double(),
+      q025_accuracy_youden = double(),
+      q975_accuracy_youden = double(),
+      mean_balanced_accuracy_youden = double(),
+      mean_f1_youden = double(),
+      mean_mcc_youden = double(),
+      mean_accuracy_f1 = double(),
+      mean_balanced_accuracy_f1 = double(),
+      mean_f1_f1 = double(),
+      mean_mcc_f1 = double(),
+      mean_log_loss = double(),
+      mean_brier = double()
+    ))
+  }
+  metrics_tbl %>%
+    group_by(label_mode, model) %>%
+    summarise(
+      n_iterations = n(),
+      mean_auc = mean(auc, na.rm = TRUE),
+      sd_auc = sd(auc, na.rm = TRUE),
+      q025_auc = quantile(auc, 0.025, na.rm = TRUE),
+      q975_auc = quantile(auc, 0.975, na.rm = TRUE),
+      mean_accuracy_youden = mean(accuracy_youden, na.rm = TRUE),
+      sd_accuracy_youden = sd(accuracy_youden, na.rm = TRUE),
+      q025_accuracy_youden = quantile(accuracy_youden, 0.025, na.rm = TRUE),
+      q975_accuracy_youden = quantile(accuracy_youden, 0.975, na.rm = TRUE),
+      mean_balanced_accuracy_youden = mean(balanced_accuracy_youden, na.rm = TRUE),
+      mean_f1_youden = mean(f1_youden, na.rm = TRUE),
+      mean_mcc_youden = mean(mcc_youden, na.rm = TRUE),
+      mean_accuracy_f1 = mean(accuracy_f1, na.rm = TRUE),
+      mean_balanced_accuracy_f1 = mean(balanced_accuracy_f1, na.rm = TRUE),
+      mean_f1_f1 = mean(f1_f1, na.rm = TRUE),
+      mean_mcc_f1 = mean(mcc_f1, na.rm = TRUE),
+      mean_log_loss = mean(log_loss, na.rm = TRUE),
+      mean_brier = mean(brier, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(label_mode, desc(mean_auc), desc(mean_accuracy_youden))
+}
+
+permute_labels_global <- function(y, seed) {
+  set.seed(seed)
+  sample(y, length(y), replace = FALSE)
+}
+
+permute_labels_by_century <- function(y, century, seed) {
+  out <- rep(NA_character_, length(y))
+  levs <- sort(unique(century))
+  for (i in seq_along(levs)) {
+    g <- levs[i]
+    idx <- which(century == g)
+    set.seed(seed + i)
+    out[idx] <- sample(y[idx], length(idx), replace = FALSE)
+  }
+  out
+}
+
+generate_pseudo_labels <- function(df, label_mode, seed) {
+  if (label_mode == "global") return(permute_labels_global(df$manual_label, seed))
+  if (label_mode == "by_century") return(permute_labels_by_century(df$manual_label, df$century, seed))
+  stop("Unknown label mode")
+}
+
+read_hyper_table <- function(path) readr::read_csv(path, show_col_types = FALSE)
+get_hparam_row <- function(tbl, aliases) {
+  row <- tbl %>% filter(model %in% aliases) %>% slice(1)
+  if (nrow(row) == 0) stop(paste0("Missing hyperparameter row for: ", paste(aliases, collapse = ", ")))
+  row
+}
+
+hyper_tbl <- read_hyper_table(hyper_path)
+hp_nb   <- get_hparam_row(hyper_tbl, c("naive_bayes"))
+hp_enet <- get_hparam_row(hyper_tbl, c("elastic_net", "ridge"))
+hp_svm  <- get_hparam_row(hyper_tbl, c("svm_platt"))
+hp_xgb  <- get_hparam_row(hyper_tbl, c("xgboost"))
+hp_lgb  <- get_hparam_row(hyper_tbl, c("lightgbm"))
+model_label <- if (isTRUE(!is.na(hp_enet$alpha[1]) && hp_enet$alpha[1] > 0)) "elastic_net" else "ridge"
+run_models[run_models == "elastic_net"] <- model_label
+
+custom_additions <- c("m", "c", "l", "d", "gt", "lt", "br", "href", "fridericus", "heinricus", "conradus", "meus", "tuus")
+stops_v1 <- scan("../../data/stopwords/stopwords_latin1.txt", what = "character", quiet = TRUE, encoding = "UTF-8")
+stops_v2 <- scan("../../data/stopwords/stopwords_latin2.txt", what = "character", comment.char = "#", quiet = TRUE, encoding = "UTF-8")
+latin_stops <- sort(unique(c(stops_v1, stops_v2, custom_additions)))
+latin_stops <- latin_stops[latin_stops != "*"]
+
+df <- readr::read_csv(file.path(data_path, "corpus_600ad.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(!is.na(text) & text != "") %>%
+  mutate(row_id = row_number())
+
+labels <- readr::read_csv(file.path(data_path, "corpus_600ad_labeled.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(label %in% c("christian", "non_christian")) %>%
+  transmute(id, manual_label = label) %>%
+  distinct(id, .keep_all = TRUE)
+
+lab <- df %>%
+  inner_join(labels, by = "id") %>%
+  arrange(row_id) %>%
+  mutate(
+    start_year = parse_historical_year(date_range_start),
+    end_year = parse_historical_year(date_range_end),
+    start_year0 = start_year,
+    end_year0 = end_year,
+    start_year = dplyr::if_else(!is.na(start_year0) & !is.na(end_year0), pmin(start_year0, end_year0), start_year0),
+    end_year = dplyr::if_else(!is.na(start_year0) & !is.na(end_year0), pmax(start_year0, end_year0), end_year0)
+  ) %>%
+  select(-start_year0, -end_year0) %>%
+  mutate(
+    mid_year = if_else(!is.na(start_year) & !is.na(end_year), (start_year + end_year) / 2, NA_real_),
+    century_index = year_to_century_index(mid_year),
+    century = century_label(century_index)
+  )
+
+if (nrow(lab) == 0) stop("No labeled rows available.")
+if (length(unique(lab$manual_label)) < 2) stop("Both classes are required in the labeled corpus.")
+if (min(table(lab$manual_label)) < min_glmnet_class) stop("The labeled corpus minority class is too small for the elastic-net path.")
+
+# =========================
+# precompute matrices once
+# =========================
+all_tokens <- quanteda::tokens(lab$text, remove_punct = TRUE, remove_numbers = TRUE) %>%
+  quanteda::tokens_remove(pattern = latin_stops)
+all_dfm <- quanteda::dfm(all_tokens)
+if (min_docfreq > 1L) all_dfm <- quanteda::dfm_trim(all_dfm, min_docfreq = min_docfreq, docfreq_type = "count")
+if (quanteda::nfeat(all_dfm) == 0) stop("No features remain after filtering.")
+
+x_counts_all <- as(all_dfm, "dgCMatrix")
+N_all <- nrow(x_counts_all)
+n_k <- Matrix::colSums(x_counts_all > 0)
+idf <- log((N_all + 1) / (n_k + 1)) + 1
+x_tfidf_all <- x_counts_all
+x_tfidf_all@x <- 1 + log(x_tfidf_all@x)
+x_tfidf_all <- x_tfidf_all %*% Matrix::Diagonal(x = idf)
+row_norms <- sqrt(Matrix::rowSums(x_tfidf_all^2))
+row_norms[row_norms == 0] <- 1
+x_tfidf_all <- x_tfidf_all / row_norms
+x_tfidf_all <- Matrix::drop0(x_tfidf_all)
+
+fit_and_predict_fold <- function(model_name, tr, va, y_train, seed = 123) {
+  y01_train <- as.integer(y_train == "christian")
+  xtr_counts <- x_counts_all[tr, , drop = FALSE]
+  xva_counts <- x_counts_all[va, , drop = FALSE]
+  xtr <- x_tfidf_all[tr, , drop = FALSE]
+  xva <- x_tfidf_all[va, , drop = FALSE]
+
+  if (model_name == "naive_bayes") {
+    fit <- quanteda.textmodels::textmodel_nb(xtr_counts, y_train)
+    prob_train <- as.numeric(predict(fit, newdata = xtr_counts, type = "probability")[, "christian"])
+    prob_test  <- as.numeric(predict(fit, newdata = xva_counts, type = "probability")[, "christian"])
+  } else if (model_name %in% c("elastic_net", "ridge")) {
+    alpha_use <- dplyr::coalesce(hp_enet$alpha[1], 0)
+    lambda_use <- dplyr::coalesce(hp_enet$lambda_1se[1], hp_enet$lambda_min[1])
+    fit <- glmnet::glmnet(
+      x = xtr,
+      y = y01_train,
+      family = "binomial",
+      alpha = alpha_use,
+      lambda = lambda_use,
+      standardize = TRUE,
+      maxit = 1e6
+    )
+    prob_train <- as.numeric(predict(fit, newx = xtr, type = "response"))
+    prob_test  <- as.numeric(predict(fit, newx = xva, type = "response"))
+  } else if (model_name == "svm_platt") {
+    fit <- suppressWarnings(LiblineaR::LiblineaR(data = as.matrix(xtr), target = y_train, type = 7, cost = hp_svm$cost[1]))
+    raw_train <- suppressWarnings(as.numeric(predict(fit, as.matrix(xtr), decisionValues = TRUE)$decisionValues[, 1]))
+    raw_test  <- suppressWarnings(as.numeric(predict(fit, as.matrix(xva), decisionValues = TRUE)$decisionValues[, 1]))
+    sgn <- if (mean(raw_train[y_train == "christian"]) >= mean(raw_train[y_train == "non_christian"])) 1 else -1
+    raw_train <- sgn * raw_train
+    raw_test  <- sgn * raw_test
+    mu <- mean(raw_train)
+    sdv <- stats::sd(raw_train)
+    if (!is.finite(sdv) || sdv == 0) sdv <- 1
+    prob_train <- plogis((raw_train - mu) / sdv)
+    prob_test  <- plogis((raw_test - mu) / sdv)
+  } else if (model_name == "xgboost") {
+    spw <- sum(y_train == "non_christian") / max(sum(y_train == "christian"), 1)
+    pars <- list(
+      booster = "gbtree",
+      objective = "binary:logistic",
+      eval_metric = "logloss",
+      tree_method = "hist",
+      eta = hp_xgb$eta[1],
+      max_depth = as.integer(hp_xgb$max_depth[1]),
+      min_child_weight = hp_xgb$min_child_weight[1],
+      subsample = hp_xgb$subsample[1],
+      colsample_bytree = hp_xgb$colsample_bytree[1],
+      gamma = hp_xgb$gamma[1],
+      scale_pos_weight = spw
+    )
+    fit <- xgboost::xgb.train(
+      params = pars,
+      data = xgboost::xgb.DMatrix(xtr, label = y01_train),
+      nrounds = as.integer(hp_xgb$best_nrounds[1]),
+      verbose = 0
+    )
+    prob_train <- as.numeric(predict(fit, xgboost::xgb.DMatrix(xtr)))
+    prob_test  <- as.numeric(predict(fit, xgboost::xgb.DMatrix(xva)))
+  } else if (model_name == "lightgbm") {
+    pars <- list(
+      objective = "binary",
+      metric = "binary_logloss",
+      boosting = "gbdt",
+      learning_rate = hp_lgb$learning_rate[1],
+      num_leaves = as.integer(hp_lgb$num_leaves[1]),
+      min_data_in_leaf = as.integer(hp_lgb$min_data_in_leaf[1]),
+      feature_fraction = hp_lgb$feature_fraction[1],
+      bagging_fraction = hp_lgb$bagging_fraction[1],
+      bagging_freq = 1L,
+      is_unbalance = TRUE,
+      first_metric_only = TRUE,
+      seed = seed,
+      feature_fraction_seed = seed,
+      bagging_seed = seed,
+      verbosity = -1
+    )
+    dtrain <- lightgbm::lgb.Dataset(
+      data = xtr,
+      label = y01_train,
+      params = list(feature_pre_filter = FALSE),
+      free_raw_data = TRUE
+    )
+    fit <- lightgbm::lgb.train(
+      params = pars,
+      data = dtrain,
+      nrounds = as.integer(hp_lgb$best_nrounds[1]),
+      verbose = -1
+    )
+    prob_train <- as.numeric(predict(fit, xtr, num_iteration = as.integer(hp_lgb$best_nrounds[1])))
+    prob_test  <- as.numeric(predict(fit, xva, num_iteration = as.integer(hp_lgb$best_nrounds[1])))
+  } else {
+    stop("Unknown model")
+  }
+
+  prob_train <- safe_prob(prob_train)
+  prob_test <- safe_prob(prob_test)
+  th_y <- choose_threshold(y_train, prob_train, "youden")
+  th_f <- choose_threshold(y_train, prob_train, "f1")
+  list(
+    prob = prob_test,
+    pred_y = ifelse(prob_test >= th_y, "christian", "non_christian"),
+    pred_f = ifelse(prob_test >= th_f, "christian", "non_christian")
+  )
+}
+
+evaluate_one_permutation <- function(df, pseudo_y, iteration, label_mode) {
+  folds <- make_folds(pseudo_y, k = k_folds_outer, seed = 100000 + iteration)
+  metrics_rows <- list()
+  pred_rows <- list()
+  log_rows <- list()
+  k <- 1L
+  p <- 1L
+  l <- 1L
+
+  oof_store <- lapply(run_models, function(m) {
+    list(prob = rep(NA_real_, nrow(df)), pred_y = rep(NA_character_, nrow(df)), pred_f = rep(NA_character_, nrow(df)))
+  })
+  names(oof_store) <- run_models
+
+  for (m in run_models) {
+    failed <- FALSE
+    detail <- ""
+    for (j in seq_along(folds)) {
+      va <- folds[[j]]
+      tr <- setdiff(seq_len(nrow(df)), va)
+      fit_res <- tryCatch(
+        fit_and_predict_fold(m, tr, va, pseudo_y[tr], seed = 1000000 + iteration * 100 + j * 10 + match(m, run_models)),
+        error = function(e) e
+      )
+      if (inherits(fit_res, "error")) {
+        failed <- TRUE
+        detail <- paste0("outer_fold_", j, ": ", conditionMessage(fit_res))
+        break
+      }
+      oof_store[[m]]$prob[va] <- fit_res$prob
+      oof_store[[m]]$pred_y[va] <- fit_res$pred_y
+      oof_store[[m]]$pred_f[va] <- fit_res$pred_f
+    }
+
+    model_name_out <- ifelse(m == "elastic_net", model_label, m)
+
+    if (failed) {
+      log_rows[[l]] <- tibble(iteration = iteration, label_mode = label_mode, model = model_name_out, status = "failed", detail = detail)
+      l <- l + 1L
+      next
+    }
+
+    metrics_rows[[k]] <- summarize_iteration(
+      iteration = iteration,
+      label_mode = label_mode,
+      model_name = model_name_out,
+      y = pseudo_y,
+      prob = oof_store[[m]]$prob,
+      pred_y = oof_store[[m]]$pred_y,
+      pred_f = oof_store[[m]]$pred_f
+    )
+    k <- k + 1L
+    log_rows[[l]] <- tibble(iteration = iteration, label_mode = label_mode, model = model_name_out, status = "ok", detail = "")
+    l <- l + 1L
+
+    if (isTRUE(save_oof_predictions)) {
+      pred_rows[[p]] <- tibble(
+        iteration = iteration,
+        label_mode = label_mode,
+        model = model_name_out,
+        row_id = df$row_id,
+        id = df$id,
+        century = df$century,
+        pseudo_label = pseudo_y,
+        prob = oof_store[[m]]$prob,
+        pred_youden = oof_store[[m]]$pred_y,
+        pred_f1 = oof_store[[m]]$pred_f
+      )
+      p <- p + 1L
+    }
+  }
+
+  list(
+    metrics = if (length(metrics_rows) > 0) bind_rows(metrics_rows) else empty_metrics_tbl(),
+    predictions = if (length(pred_rows) > 0) bind_rows(pred_rows) else tibble(),
+    log = if (length(log_rows) > 0) bind_rows(log_rows) else empty_log_tbl()
+  )
+}
+
+run_one <- function(iter, label_mode, df) {
+  pseudo_y <- generate_pseudo_labels(df, label_mode, seed = 10000 + 1000 * match(label_mode, label_modes) + iter)
+  evaluate_one_permutation(df, pseudo_y, iteration = iter, label_mode = label_mode)
+}
+
+readr::write_csv(hyper_tbl, file.path(results_path, "hyperparameters_used.csv"))
+readr::write_csv(
+  lab %>% select(id, row_id, manual_label, date_range_start, date_range_end, start_year, end_year, mid_year, century_index, century),
+  file.path(results_path, "labeled_corpus_with_centuries.csv")
+)
+readr::write_csv(
+  lab %>% count(manual_label, name = "n") %>% mutate(prop = n / sum(n)),
+  file.path(results_path, "observed_global_label_composition.csv")
+)
+readr::write_csv(
+  lab %>% count(century_index, century, manual_label, name = "n") %>% group_by(century_index, century) %>% mutate(prop = n / sum(n)) %>% ungroup() %>% arrange(century_index, manual_label),
+  file.path(results_path, "observed_century_label_composition.csv")
+)
+
+all_metrics <- empty_metrics_tbl()
+all_logs <- empty_log_tbl()
+all_predictions <- tibble()
+
+for (label_mode in label_modes) {
+  message(sprintf("Running %s permutations with %d cores", label_mode, n_cores))
+  res_list <- if (.Platform$OS.type == "unix" && n_cores > 1L) {
+    parallel::mclapply(seq_len(n_perm), run_one, label_mode = label_mode, df = lab, mc.cores = n_cores)
+  } else {
+    lapply(seq_len(n_perm), run_one, label_mode = label_mode, df = lab)
+  }
+
+  all_metrics <- bind_rows(all_metrics, bind_rows(lapply(res_list, `[[`, "metrics")))
+  all_logs <- bind_rows(all_logs, bind_rows(lapply(res_list, `[[`, "log")))
+  if (isTRUE(save_oof_predictions)) {
+    preds_here <- bind_rows(lapply(res_list, `[[`, "predictions"))
+    if (nrow(preds_here) > 0) all_predictions <- bind_rows(all_predictions, preds_here)
+  }
+}
+
+summary_tbl <- summarise_metrics(all_metrics)
+
+readr::write_csv(all_metrics, file.path(results_path, "permutation_metrics.csv"))
+readr::write_csv(summary_tbl, file.path(results_path, "permutation_summary.csv"))
+readr::write_csv(all_logs, file.path(results_path, "permutation_run_log.csv"))
+if (isTRUE(save_oof_predictions) && nrow(all_predictions) > 0) {
+  readr::write_csv(all_predictions, file.path(results_path, "permutation_oof_predictions.csv"))
+}
+
+cat("\nResults written to:\n")
+cat(results_path, "\n")
+cat("\nSummary:\n")
+print(summary_tbl, n = Inf)
+
+```

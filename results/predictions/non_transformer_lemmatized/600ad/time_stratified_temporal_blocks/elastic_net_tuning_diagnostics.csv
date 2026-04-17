@@ -1,0 +1,2 @@
+split_type,train_period,test_period,model,tuned_alpha,tuned_lambda,tuned_lambda_rule,tuned_cv_auc,tuned_cv_log_loss,tuned_cv_brier
+rolling_future_block,<=_3c_BCE__to__4c_CE,5c_CE__to__6c_CE,elastic_net,0.1,2.517992662531912,lambda.min,0.9967920676582093,0.6154270888375523,0.21125391804891844

@@ -1,0 +1,8 @@
+model,alpha,lambda_1se,lambda_min,cost,candidate_id,eta,max_depth,min_child_weight,subsample,colsample_bytree,gamma,log_loss,auc,best_nrounds,learning_rate,num_leaves,min_data_in_leaf,feature_fraction,bagging_fraction,max_tokens,hidden_units,dropout,lr,epochs,auc_margin,seq_length,embed_dim,filters,kernel_size,dense_units
+naive_bayes,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+elastic_net,0.2,0.10108179191108992,0.022062564025171236,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+svm_platt,NA,NA,NA,16,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+xgboost,NA,NA,NA,NA,255,0.05,4,1,0.7,0.6,0.5,0.1600161538365441,0.9577659182922316,4000,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+lightgbm,NA,NA,NA,NA,81,NA,NA,NA,NA,NA,NA,0.1699336313145706,0.9624125874125872,132,0.05,15,20,0.6,0.7,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+tfidf_mlp,NA,NA,NA,NA,22,NA,NA,NA,NA,NA,NA,0.5772777972910659,NA,NA,NA,NA,NA,NA,NA,10000,128,0.4,5e-4,15,0.9115292602134697,NA,NA,NA,NA,NA
+word_cnn,NA,NA,NA,NA,63,NA,NA,NA,NA,NA,NA,0.5019088256813107,NA,NA,NA,NA,NA,NA,NA,20000,NA,0.5,0.001,10,0.6141884431358124,1500,200,128,7,128

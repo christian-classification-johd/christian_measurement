@@ -1,6 +1,6 @@
-model,lambda_1se,lambda_min,cost,candidate_id,eta,max_depth,min_child_weight,subsample,colsample_bytree,gamma,log_loss,auc,best_nrounds,learning_rate,num_leaves,min_data_in_leaf,feature_fraction,bagging_fraction,alpha
+model,alpha,lambda_1se,lambda_min,cost,candidate_id,eta,max_depth,min_child_weight,subsample,colsample_bytree,gamma,log_loss,auc,best_nrounds,learning_rate,num_leaves,min_data_in_leaf,feature_fraction,bagging_fraction
 naive_bayes,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
-svm_platt,NA,NA,8,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
-xgboost,NA,NA,NA,73,0.01,6,1,0.7,0.6,0,0.12676913281129074,0.9854158998895832,4000,NA,NA,NA,NA,NA,NA
-lightgbm,NA,NA,NA,78,NA,NA,NA,NA,NA,NA,0.12692816400291054,0.9827015090172968,74,0.05,15,10,0.6,0.85,NA
-ridge,0.0987210075703853,0.017048953051111912,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.2
+elastic_net,0.2,0.10108380638236586,0.022063003712682324,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+svm_platt,NA,NA,NA,16,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+xgboost,NA,NA,NA,NA,222,0.05,3,1,0.7,0.8,0.5,0.1592723597080113,0.9543614280456384,4000,NA,NA,NA,NA,NA
+lightgbm,NA,NA,NA,NA,45,NA,NA,NA,NA,NA,NA,0.17226606551512935,0.9613084284136925,168,0.03,15,20,0.6,0.7

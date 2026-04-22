@@ -1,0 +1,41 @@
+time,step,detail
+2026-04-18 23:16:28,load_config,
+2026-04-18 23:16:29,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:16:29,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:16:29,outer_fold_start,fold 1 of 5
+2026-04-18 23:16:34,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:18:42,load_config,
+2026-04-18 23:18:43,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:18:43,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:18:43,outer_fold_start,fold 1 of 5
+2026-04-18 23:18:48,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:19:41,load_config,
+2026-04-18 23:19:42,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:19:42,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:19:42,outer_fold_start,fold 1 of 5
+2026-04-18 23:19:48,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:23:03,load_config,
+2026-04-18 23:23:05,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:23:05,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:23:05,outer_fold_start,fold 1 of 5
+2026-04-18 23:23:10,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:27:56,load_config,
+2026-04-18 23:27:57,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:27:57,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:27:57,outer_fold_start,fold 1 of 5
+2026-04-18 23:28:02,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:32:35,load_config,
+2026-04-18 23:32:36,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:32:36,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:32:36,outer_fold_start,fold 1 of 5
+2026-04-18 23:32:41,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:33:12,load_config,
+2026-04-18 23:33:13,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:33:13,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:33:13,outer_fold_start,fold 1 of 5
+2026-04-18 23:33:18,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245
+2026-04-18 23:36:30,load_config,
+2026-04-18 23:36:31,data_loaded,"{""config_path"": ""../../results/predictions/bert_outputs_unlemmatized/600ad/bert_run_config.json"", ""lemma_path"": ""../../data/processed_texts/600ad/corpus_600ad.csv"", ""surface_path"": ""../../data/processed_texts/600ad/corpus_600ad_unlemmatized.csv"", ""label_path"": ""../../data/processed_texts/600ad/corpus_600ad_labeled.csv"", ""lemma_text_col"": ""text"", ""surface_text_col"": ""text_raw""}"
+2026-04-18 23:36:31,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 23:36:31,outer_fold_start,fold 1 of 5
+2026-04-18 23:36:36,date_rank_done,outer 1 | ranked 9989 lemmas | aligned_docs = 44 | skipped_docs = 245

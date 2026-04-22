@@ -1,0 +1,181 @@
+time,step,detail
+2026-04-18 19:50:08,load_data,reading corpus and labels
+2026-04-18 19:56:24,load_data,reading corpus and labels
+2026-04-18 19:56:25,date_coverage,"non-Christian labeled = 286, with valid date_mid = 286"
+2026-04-18 19:56:27,outer_fold_start,fold 1 of 5
+2026-04-18 19:56:35,date_rank_done,outer 1 | ranked 9471 non-Christian terms
+2026-04-18 19:56:59,fold_matrix_built,outer 1 | n_remove = 0 | 16242 features
+2026-04-18 19:56:59,fit_nb,outer 1 | n = 0
+2026-04-18 19:57:00,fit_enet,outer 1 | n = 0
+2026-04-18 19:57:00,fit_svm,outer 1 | n = 0
+2026-04-18 19:57:03,fit_xgb,outer 1 | n = 0
+2026-04-18 20:00:10,fit_lgb,outer 1 | n = 0
+2026-04-18 20:00:59,fold_matrix_built,outer 1 | n_remove = 25 | 16217 features
+2026-04-18 20:00:59,fit_nb,outer 1 | n = 25
+2026-04-18 20:00:59,fit_enet,outer 1 | n = 25
+2026-04-18 20:01:00,fit_svm,outer 1 | n = 25
+2026-04-18 20:01:02,fit_xgb,outer 1 | n = 25
+2026-04-18 20:04:17,fit_lgb,outer 1 | n = 25
+2026-04-18 20:05:00,fold_matrix_built,outer 1 | n_remove = 50 | 16192 features
+2026-04-18 20:05:00,fit_nb,outer 1 | n = 50
+2026-04-18 20:05:01,fit_enet,outer 1 | n = 50
+2026-04-18 20:05:01,fit_svm,outer 1 | n = 50
+2026-04-18 20:05:03,fit_xgb,outer 1 | n = 50
+2026-04-18 20:08:10,fit_lgb,outer 1 | n = 50
+2026-04-18 20:09:07,fold_matrix_built,outer 1 | n_remove = 100 | 16142 features
+2026-04-18 20:09:07,fit_nb,outer 1 | n = 100
+2026-04-18 20:09:07,fit_enet,outer 1 | n = 100
+2026-04-18 20:09:08,fit_svm,outer 1 | n = 100
+2026-04-18 20:09:11,fit_xgb,outer 1 | n = 100
+2026-04-18 20:12:23,fit_lgb,outer 1 | n = 100
+2026-04-18 20:13:21,fold_matrix_built,outer 1 | n_remove = 200 | 16042 features
+2026-04-18 20:13:21,fit_nb,outer 1 | n = 200
+2026-04-18 20:13:21,fit_enet,outer 1 | n = 200
+2026-04-18 20:13:22,fit_svm,outer 1 | n = 200
+2026-04-18 20:13:24,fit_xgb,outer 1 | n = 200
+2026-04-18 20:17:02,fit_lgb,outer 1 | n = 200
+2026-04-18 20:17:33,outer_fold_done,fold 1 of 5
+2026-04-18 20:17:33,outer_fold_start,fold 2 of 5
+2026-04-18 20:17:38,date_rank_done,outer 2 | ranked 9202 non-Christian terms
+2026-04-18 20:17:52,fold_matrix_built,outer 2 | n_remove = 0 | 15866 features
+2026-04-18 20:17:52,fit_nb,outer 2 | n = 0
+2026-04-18 20:17:52,fit_enet,outer 2 | n = 0
+2026-04-18 20:17:53,fit_svm,outer 2 | n = 0
+2026-04-18 20:17:54,fit_xgb,outer 2 | n = 0
+2026-04-18 20:21:33,fit_lgb,outer 2 | n = 0
+2026-04-18 20:22:26,fold_matrix_built,outer 2 | n_remove = 25 | 15841 features
+2026-04-18 20:22:26,fit_nb,outer 2 | n = 25
+2026-04-18 20:22:26,fit_enet,outer 2 | n = 25
+2026-04-18 20:22:27,fit_svm,outer 2 | n = 25
+2026-04-18 20:22:29,fit_xgb,outer 2 | n = 25
+2026-04-18 20:25:38,fit_lgb,outer 2 | n = 25
+2026-04-18 20:26:21,fold_matrix_built,outer 2 | n_remove = 50 | 15816 features
+2026-04-18 20:26:21,fit_nb,outer 2 | n = 50
+2026-04-18 20:26:21,fit_enet,outer 2 | n = 50
+2026-04-18 20:26:22,fit_svm,outer 2 | n = 50
+2026-04-18 20:26:23,fit_xgb,outer 2 | n = 50
+2026-04-18 20:29:06,fit_lgb,outer 2 | n = 50
+2026-04-18 20:29:48,fold_matrix_built,outer 2 | n_remove = 100 | 15766 features
+2026-04-18 20:29:48,fit_nb,outer 2 | n = 100
+2026-04-18 20:29:48,fit_enet,outer 2 | n = 100
+2026-04-18 20:29:48,fit_svm,outer 2 | n = 100
+2026-04-18 20:29:50,fit_xgb,outer 2 | n = 100
+2026-04-18 20:32:46,fit_lgb,outer 2 | n = 100
+2026-04-18 20:33:41,fold_matrix_built,outer 2 | n_remove = 200 | 15666 features
+2026-04-18 20:33:41,fit_nb,outer 2 | n = 200
+2026-04-18 20:33:41,fit_enet,outer 2 | n = 200
+2026-04-18 20:33:42,fit_svm,outer 2 | n = 200
+2026-04-18 20:33:44,fit_xgb,outer 2 | n = 200
+2026-04-18 20:36:36,fit_lgb,outer 2 | n = 200
+2026-04-18 20:37:03,outer_fold_done,fold 2 of 5
+2026-04-18 20:37:03,outer_fold_start,fold 3 of 5
+2026-04-18 20:37:09,date_rank_done,outer 3 | ranked 9216 non-Christian terms
+2026-04-18 20:37:22,fold_matrix_built,outer 3 | n_remove = 0 | 15887 features
+2026-04-18 20:37:22,fit_nb,outer 3 | n = 0
+2026-04-18 20:37:22,fit_enet,outer 3 | n = 0
+2026-04-18 20:37:22,fit_svm,outer 3 | n = 0
+2026-04-18 20:37:24,fit_xgb,outer 3 | n = 0
+2026-04-18 20:40:42,fit_lgb,outer 3 | n = 0
+2026-04-18 20:41:30,fold_matrix_built,outer 3 | n_remove = 25 | 15862 features
+2026-04-18 20:41:30,fit_nb,outer 3 | n = 25
+2026-04-18 20:41:30,fit_enet,outer 3 | n = 25
+2026-04-18 20:41:30,fit_svm,outer 3 | n = 25
+2026-04-18 20:41:32,fit_xgb,outer 3 | n = 25
+2026-04-18 20:44:06,fit_lgb,outer 3 | n = 25
+2026-04-18 20:44:51,fold_matrix_built,outer 3 | n_remove = 50 | 15837 features
+2026-04-18 20:44:51,fit_nb,outer 3 | n = 50
+2026-04-18 20:44:51,fit_enet,outer 3 | n = 50
+2026-04-18 20:44:52,fit_svm,outer 3 | n = 50
+2026-04-18 20:44:53,fit_xgb,outer 3 | n = 50
+2026-04-18 20:47:27,fit_lgb,outer 3 | n = 50
+2026-04-18 20:48:12,fold_matrix_built,outer 3 | n_remove = 100 | 15787 features
+2026-04-18 20:48:12,fit_nb,outer 3 | n = 100
+2026-04-18 20:48:12,fit_enet,outer 3 | n = 100
+2026-04-18 20:48:13,fit_svm,outer 3 | n = 100
+2026-04-18 20:48:14,fit_xgb,outer 3 | n = 100
+2026-04-18 20:51:01,fit_lgb,outer 3 | n = 100
+2026-04-18 20:51:42,fold_matrix_built,outer 3 | n_remove = 200 | 15687 features
+2026-04-18 20:51:42,fit_nb,outer 3 | n = 200
+2026-04-18 20:51:42,fit_enet,outer 3 | n = 200
+2026-04-18 20:51:43,fit_svm,outer 3 | n = 200
+2026-04-18 20:51:45,fit_xgb,outer 3 | n = 200
+2026-04-18 20:54:19,fit_lgb,outer 3 | n = 200
+2026-04-18 20:54:46,outer_fold_done,fold 3 of 5
+2026-04-18 20:54:46,outer_fold_start,fold 4 of 5
+2026-04-18 20:54:52,date_rank_done,outer 4 | ranked 9703 non-Christian terms
+2026-04-18 20:55:06,fold_matrix_built,outer 4 | n_remove = 0 | 16561 features
+2026-04-18 20:55:06,fit_nb,outer 4 | n = 0
+2026-04-18 20:55:06,fit_enet,outer 4 | n = 0
+2026-04-18 20:55:07,fit_svm,outer 4 | n = 0
+2026-04-18 20:55:09,fit_xgb,outer 4 | n = 0
+2026-04-18 20:58:02,fit_lgb,outer 4 | n = 0
+2026-04-18 20:58:55,fold_matrix_built,outer 4 | n_remove = 25 | 16536 features
+2026-04-18 20:58:55,fit_nb,outer 4 | n = 25
+2026-04-18 20:58:55,fit_enet,outer 4 | n = 25
+2026-04-18 20:58:57,fit_svm,outer 4 | n = 25
+2026-04-18 20:59:00,fit_xgb,outer 4 | n = 25
+2026-04-18 21:02:31,fit_lgb,outer 4 | n = 25
+2026-04-18 21:03:23,fold_matrix_built,outer 4 | n_remove = 50 | 16511 features
+2026-04-18 21:03:23,fit_nb,outer 4 | n = 50
+2026-04-18 21:03:23,fit_enet,outer 4 | n = 50
+2026-04-18 21:03:24,fit_svm,outer 4 | n = 50
+2026-04-18 21:03:26,fit_xgb,outer 4 | n = 50
+2026-04-18 21:07:26,fit_lgb,outer 4 | n = 50
+2026-04-18 21:08:16,fold_matrix_built,outer 4 | n_remove = 100 | 16461 features
+2026-04-18 21:08:16,fit_nb,outer 4 | n = 100
+2026-04-18 21:08:16,fit_enet,outer 4 | n = 100
+2026-04-18 21:08:17,fit_svm,outer 4 | n = 100
+2026-04-18 21:08:19,fit_xgb,outer 4 | n = 100
+2026-04-18 21:11:13,fit_lgb,outer 4 | n = 100
+2026-04-18 21:11:55,fold_matrix_built,outer 4 | n_remove = 200 | 16361 features
+2026-04-18 21:11:55,fit_nb,outer 4 | n = 200
+2026-04-18 21:11:55,fit_enet,outer 4 | n = 200
+2026-04-18 21:11:56,fit_svm,outer 4 | n = 200
+2026-04-18 21:11:57,fit_xgb,outer 4 | n = 200
+2026-04-18 21:15:14,fit_lgb,outer 4 | n = 200
+2026-04-18 21:16:02,outer_fold_done,fold 4 of 5
+2026-04-18 21:16:02,outer_fold_start,fold 5 of 5
+2026-04-18 21:16:07,date_rank_done,outer 5 | ranked 9800 non-Christian terms
+2026-04-18 21:16:22,fold_matrix_built,outer 5 | n_remove = 0 | 16980 features
+2026-04-18 21:16:22,fit_nb,outer 5 | n = 0
+2026-04-18 21:16:22,fit_enet,outer 5 | n = 0
+2026-04-18 21:16:22,fit_svm,outer 5 | n = 0
+2026-04-18 21:16:25,fit_xgb,outer 5 | n = 0
+2026-04-18 21:19:28,fit_lgb,outer 5 | n = 0
+2026-04-18 21:20:13,fold_matrix_built,outer 5 | n_remove = 25 | 16955 features
+2026-04-18 21:20:13,fit_nb,outer 5 | n = 25
+2026-04-18 21:20:13,fit_enet,outer 5 | n = 25
+2026-04-18 21:20:14,fit_svm,outer 5 | n = 25
+2026-04-18 21:20:16,fit_xgb,outer 5 | n = 25
+2026-04-18 21:23:04,fit_lgb,outer 5 | n = 25
+2026-04-18 21:23:57,fold_matrix_built,outer 5 | n_remove = 50 | 16930 features
+2026-04-18 21:23:57,fit_nb,outer 5 | n = 50
+2026-04-18 21:23:57,fit_enet,outer 5 | n = 50
+2026-04-18 21:23:58,fit_svm,outer 5 | n = 50
+2026-04-18 21:24:01,fit_xgb,outer 5 | n = 50
+2026-04-18 21:27:49,fit_lgb,outer 5 | n = 50
+2026-04-18 21:28:54,fold_matrix_built,outer 5 | n_remove = 100 | 16880 features
+2026-04-18 21:28:54,fit_nb,outer 5 | n = 100
+2026-04-18 21:28:55,fit_enet,outer 5 | n = 100
+2026-04-18 21:28:56,fit_svm,outer 5 | n = 100
+2026-04-18 21:29:00,fit_xgb,outer 5 | n = 100
+2026-04-18 21:33:06,fit_lgb,outer 5 | n = 100
+2026-04-18 21:34:09,fold_matrix_built,outer 5 | n_remove = 200 | 16780 features
+2026-04-18 21:34:09,fit_nb,outer 5 | n = 200
+2026-04-18 21:34:09,fit_enet,outer 5 | n = 200
+2026-04-18 21:34:10,fit_svm,outer 5 | n = 200
+2026-04-18 21:34:12,fit_xgb,outer 5 | n = 200
+2026-04-18 21:38:17,fit_lgb,outer 5 | n = 200
+2026-04-18 21:38:55,outer_fold_done,fold 5 of 5
+2026-04-18 21:39:00,oof_summary_done,nested CV with temporal sweep completed
+2026-04-18 21:39:15,full_fit_start,n_remove = 0
+2026-04-18 21:45:42,full_fit_done_n,n_remove = 0
+2026-04-18 21:45:42,full_fit_start,n_remove = 25
+2026-04-18 21:50:57,full_fit_done_n,n_remove = 25
+2026-04-18 21:50:57,full_fit_start,n_remove = 50
+2026-04-18 21:57:27,full_fit_done_n,n_remove = 50
+2026-04-18 21:57:27,full_fit_start,n_remove = 100
+2026-04-18 22:07:10,full_fit_done_n,n_remove = 100
+2026-04-18 22:07:10,full_fit_start,n_remove = 200
+2026-04-18 22:19:27,full_fit_done_n,n_remove = 200
+2026-04-18 22:19:31,all_done,temporal-sweep pipeline finished

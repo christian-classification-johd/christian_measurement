@@ -1,0 +1,181 @@
+outcome,score,model,n_k_gt_0_7,n_k_gt_1_0,max_k,worst_row,worst_id,outcome_label,score_label,model_label
+n_words,score_nb_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Intercept only
+n_words,score_nb_logit_aligned,score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Score only
+n_words,score_nb_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Date + text type
+n_words,score_nb_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Date + text type + score
+n_words,score_nb_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Smooth date + text type
+n_words,score_nb_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Smooth date + text type + score
+n_words,score_nb_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + date + text type
+n_words,score_nb_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + date + text type + score
+n_words,score_nb_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + smooth date + text type
+n_words,score_nb_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + smooth date + text type + score
+n_words,score_nb_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Date + text type + creator RE
+n_words,score_nb_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Date + text type + score + creator RE
+n_words,score_nb_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Smooth date + text type + creator RE
+n_words,score_nb_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Smooth date + text type + score + creator RE
+n_words,score_nb_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + date + text type + creator RE
+n_words,score_nb_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + date + text type + score + creator RE
+n_words,score_nb_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + smooth date + text type + creator RE
+n_words,score_nb_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Naive Bayes score,Prediction source + smooth date + text type + score + creator RE
+n_words,score_ridge_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (words),Ridge score,Intercept only
+n_words,score_ridge_logit_aligned,score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Score only
+n_words,score_ridge_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Date + text type
+n_words,score_ridge_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Date + text type + score
+n_words,score_ridge_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Smooth date + text type
+n_words,score_ridge_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Smooth date + text type + score
+n_words,score_ridge_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + date + text type
+n_words,score_ridge_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + date + text type + score
+n_words,score_ridge_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + smooth date + text type
+n_words,score_ridge_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + smooth date + text type + score
+n_words,score_ridge_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Date + text type + creator RE
+n_words,score_ridge_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Date + text type + score + creator RE
+n_words,score_ridge_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Smooth date + text type + creator RE
+n_words,score_ridge_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Smooth date + text type + score + creator RE
+n_words,score_ridge_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + date + text type + creator RE
+n_words,score_ridge_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + date + text type + score + creator RE
+n_words,score_ridge_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + smooth date + text type + creator RE
+n_words,score_ridge_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),Ridge score,Prediction source + smooth date + text type + score + creator RE
+n_words,score_svm_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (words),SVM score,Intercept only
+n_words,score_svm_logit_aligned,score,NA,NA,NA,NA,NA,Document length (words),SVM score,Score only
+n_words,score_svm_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Date + text type
+n_words,score_svm_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Date + text type + score
+n_words,score_svm_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Smooth date + text type
+n_words,score_svm_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Smooth date + text type + score
+n_words,score_svm_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + date + text type
+n_words,score_svm_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + date + text type + score
+n_words,score_svm_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + smooth date + text type
+n_words,score_svm_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + smooth date + text type + score
+n_words,score_svm_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Date + text type + creator RE
+n_words,score_svm_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Date + text type + score + creator RE
+n_words,score_svm_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Smooth date + text type + creator RE
+n_words,score_svm_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Smooth date + text type + score + creator RE
+n_words,score_svm_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + date + text type + creator RE
+n_words,score_svm_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + date + text type + score + creator RE
+n_words,score_svm_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + smooth date + text type + creator RE
+n_words,score_svm_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),SVM score,Prediction source + smooth date + text type + score + creator RE
+n_words,score_xgb_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Intercept only
+n_words,score_xgb_logit_aligned,score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Score only
+n_words,score_xgb_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Date + text type
+n_words,score_xgb_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Date + text type + score
+n_words,score_xgb_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Smooth date + text type
+n_words,score_xgb_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Smooth date + text type + score
+n_words,score_xgb_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + date + text type
+n_words,score_xgb_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + date + text type + score
+n_words,score_xgb_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + smooth date + text type
+n_words,score_xgb_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + smooth date + text type + score
+n_words,score_xgb_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Date + text type + creator RE
+n_words,score_xgb_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Date + text type + score + creator RE
+n_words,score_xgb_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Smooth date + text type + creator RE
+n_words,score_xgb_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Smooth date + text type + score + creator RE
+n_words,score_xgb_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + date + text type + creator RE
+n_words,score_xgb_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + date + text type + score + creator RE
+n_words,score_xgb_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + smooth date + text type + creator RE
+n_words,score_xgb_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),XGBoost score,Prediction source + smooth date + text type + score + creator RE
+n_words,score_lgb_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Intercept only
+n_words,score_lgb_logit_aligned,score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Score only
+n_words,score_lgb_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Date + text type
+n_words,score_lgb_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Date + text type + score
+n_words,score_lgb_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Smooth date + text type
+n_words,score_lgb_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Smooth date + text type + score
+n_words,score_lgb_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + date + text type
+n_words,score_lgb_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + date + text type + score
+n_words,score_lgb_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + smooth date + text type
+n_words,score_lgb_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + smooth date + text type + score
+n_words,score_lgb_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Date + text type + creator RE
+n_words,score_lgb_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Date + text type + score + creator RE
+n_words,score_lgb_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Smooth date + text type + creator RE
+n_words,score_lgb_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Smooth date + text type + score + creator RE
+n_words,score_lgb_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + date + text type + creator RE
+n_words,score_lgb_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + date + text type + score + creator RE
+n_words,score_lgb_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + smooth date + text type + creator RE
+n_words,score_lgb_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (words),LightGBM score,Prediction source + smooth date + text type + score + creator RE
+n_chars,score_nb_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Intercept only
+n_chars,score_nb_logit_aligned,score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Score only
+n_chars,score_nb_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Date + text type
+n_chars,score_nb_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Date + text type + score
+n_chars,score_nb_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Smooth date + text type
+n_chars,score_nb_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Smooth date + text type + score
+n_chars,score_nb_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + date + text type
+n_chars,score_nb_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + date + text type + score
+n_chars,score_nb_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + smooth date + text type
+n_chars,score_nb_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + smooth date + text type + score
+n_chars,score_nb_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Date + text type + creator RE
+n_chars,score_nb_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Date + text type + score + creator RE
+n_chars,score_nb_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Smooth date + text type + creator RE
+n_chars,score_nb_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Smooth date + text type + score + creator RE
+n_chars,score_nb_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + date + text type + creator RE
+n_chars,score_nb_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + date + text type + score + creator RE
+n_chars,score_nb_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + smooth date + text type + creator RE
+n_chars,score_nb_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Naive Bayes score,Prediction source + smooth date + text type + score + creator RE
+n_chars,score_ridge_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Intercept only
+n_chars,score_ridge_logit_aligned,score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Score only
+n_chars,score_ridge_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Date + text type
+n_chars,score_ridge_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Date + text type + score
+n_chars,score_ridge_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Smooth date + text type
+n_chars,score_ridge_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Smooth date + text type + score
+n_chars,score_ridge_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + date + text type
+n_chars,score_ridge_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + date + text type + score
+n_chars,score_ridge_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + smooth date + text type
+n_chars,score_ridge_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + smooth date + text type + score
+n_chars,score_ridge_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Date + text type + creator RE
+n_chars,score_ridge_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Date + text type + score + creator RE
+n_chars,score_ridge_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Smooth date + text type + creator RE
+n_chars,score_ridge_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Smooth date + text type + score + creator RE
+n_chars,score_ridge_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + date + text type + creator RE
+n_chars,score_ridge_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + date + text type + score + creator RE
+n_chars,score_ridge_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + smooth date + text type + creator RE
+n_chars,score_ridge_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),Ridge score,Prediction source + smooth date + text type + score + creator RE
+n_chars,score_svm_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (characters),SVM score,Intercept only
+n_chars,score_svm_logit_aligned,score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Score only
+n_chars,score_svm_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Date + text type
+n_chars,score_svm_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Date + text type + score
+n_chars,score_svm_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Smooth date + text type
+n_chars,score_svm_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Smooth date + text type + score
+n_chars,score_svm_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + date + text type
+n_chars,score_svm_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + date + text type + score
+n_chars,score_svm_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + smooth date + text type
+n_chars,score_svm_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + smooth date + text type + score
+n_chars,score_svm_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Date + text type + creator RE
+n_chars,score_svm_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Date + text type + score + creator RE
+n_chars,score_svm_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Smooth date + text type + creator RE
+n_chars,score_svm_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Smooth date + text type + score + creator RE
+n_chars,score_svm_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + date + text type + creator RE
+n_chars,score_svm_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + date + text type + score + creator RE
+n_chars,score_svm_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + smooth date + text type + creator RE
+n_chars,score_svm_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),SVM score,Prediction source + smooth date + text type + score + creator RE
+n_chars,score_xgb_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Intercept only
+n_chars,score_xgb_logit_aligned,score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Score only
+n_chars,score_xgb_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Date + text type
+n_chars,score_xgb_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Date + text type + score
+n_chars,score_xgb_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Smooth date + text type
+n_chars,score_xgb_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Smooth date + text type + score
+n_chars,score_xgb_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + date + text type
+n_chars,score_xgb_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + date + text type + score
+n_chars,score_xgb_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + smooth date + text type
+n_chars,score_xgb_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + smooth date + text type + score
+n_chars,score_xgb_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Date + text type + creator RE
+n_chars,score_xgb_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Date + text type + score + creator RE
+n_chars,score_xgb_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Smooth date + text type + creator RE
+n_chars,score_xgb_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Smooth date + text type + score + creator RE
+n_chars,score_xgb_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + date + text type + creator RE
+n_chars,score_xgb_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + date + text type + score + creator RE
+n_chars,score_xgb_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + smooth date + text type + creator RE
+n_chars,score_xgb_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),XGBoost score,Prediction source + smooth date + text type + score + creator RE
+n_chars,score_lgb_logit_aligned,intercept,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Intercept only
+n_chars,score_lgb_logit_aligned,score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Score only
+n_chars,score_lgb_logit_aligned,date_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Date + text type
+n_chars,score_lgb_logit_aligned,date_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Date + text type + score
+n_chars,score_lgb_logit_aligned,sdate_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Smooth date + text type
+n_chars,score_lgb_logit_aligned,sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Smooth date + text type + score
+n_chars,score_lgb_logit_aligned,source_date_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + date + text type
+n_chars,score_lgb_logit_aligned,source_date_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + date + text type + score
+n_chars,score_lgb_logit_aligned,source_sdate_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + smooth date + text type
+n_chars,score_lgb_logit_aligned,source_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + smooth date + text type + score
+n_chars,score_lgb_logit_aligned,creator_date_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Date + text type + creator RE
+n_chars,score_lgb_logit_aligned,creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Date + text type + score + creator RE
+n_chars,score_lgb_logit_aligned,creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Smooth date + text type + creator RE
+n_chars,score_lgb_logit_aligned,creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Smooth date + text type + score + creator RE
+n_chars,score_lgb_logit_aligned,source_creator_date_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + date + text type + creator RE
+n_chars,score_lgb_logit_aligned,source_creator_date_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + date + text type + score + creator RE
+n_chars,score_lgb_logit_aligned,source_creator_sdate_type,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + smooth date + text type + creator RE
+n_chars,score_lgb_logit_aligned,source_creator_sdate_type_score,NA,NA,NA,NA,NA,Document length (characters),LightGBM score,Prediction source + smooth date + text type + score + creator RE

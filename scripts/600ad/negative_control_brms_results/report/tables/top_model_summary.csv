@@ -1,0 +1,11 @@
+outcome,score,best_model,looic,delta_to_next
+Document length (characters),LightGBM score,Intercept only,NA,NA
+Document length (characters),Naive Bayes score,Intercept only,NA,NA
+Document length (characters),Ridge score,Intercept only,NA,NA
+Document length (characters),SVM score,Intercept only,NA,NA
+Document length (characters),XGBoost score,Intercept only,NA,NA
+Document length (words),LightGBM score,Intercept only,NA,NA
+Document length (words),Naive Bayes score,Intercept only,NA,NA
+Document length (words),Ridge score,Intercept only,NA,NA
+Document length (words),SVM score,Intercept only,NA,NA
+Document length (words),XGBoost score,Intercept only,NA,NA

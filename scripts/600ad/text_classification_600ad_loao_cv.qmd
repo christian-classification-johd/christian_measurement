@@ -1,0 +1,3073 @@
+---
+title: "Latin text classification"
+author: "Muhammad Rehan"
+date: 2026-01-10
+format:
+  html:
+    theme:
+      light: [lux, assets/theme.scss]
+      dark: [darkly, assets/theme-dark.scss]
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    smooth-scroll: true
+    anchor-sections: true
+    code-copy: true
+    code-overflow: wrap
+    code-fold: show
+    code-tools: true
+    code-link: true
+    highlight-style: nord
+    lightbox: auto
+    citations-hover: true
+    crossrefs-hover: true
+    fig-align: center
+    fig-width: 8
+    fig-asp: 0.62
+    fig-dpi: 300
+    fig-format: svg
+    grid:
+      body-width: 980px
+      margin-width: 280px
+      gutter-width: 1.2rem
+    css: [assets/custom.css]
+
+include-in-header:
+  text: |
+    <!-- Standard meta -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b5ed7" />
+
+    <!-- KaTeX for LaTeX math -->
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"
+          integrity="sha384-/7mQh8gJtX+NEwGDbVS9/6IKxhpcJn/qdNqxabWWMwBLT/gR59OA8sLu7saEh1N5"
+          crossorigin="anonymous">
+
+    <script defer
+            src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"
+            integrity="sha384-G/jPD7WvyaManIeZDV4SSQdlqzTeWY5Avzkdxl3pNGdisz8Iky3Uczdlz7YTpcvA"
+            crossorigin="anonymous"></script>
+
+    <script defer
+            src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
+            integrity="sha384-mll67QQj1YOD9OFwP8CMLJrjCwXTlzAIXazhbugzuDUFcPRl1BDpRP70dNFu7Bbf"
+            crossorigin="anonymous"
+            onload="renderMathInElement(document.body);"></script>
+
+execute:
+  echo: true
+  warning: false
+  message: false
+  freeze: auto
+  cache: true
+  dpi: 600
+
+math: katex
+---
+
+# Classification of christian vs. non-christian documents
+
+
+## Data loading and cleaning
+
+### Loading in and filtering the data (this code chunk can be skipped if corpus.csv already exists in the script directory)
+
+```{r}
+library(tidyverse)
+library(stringi)
+
+data_path <- "../../data/processed_texts/600ad"
+results_path <- "../../results/predictions/non_transformer_lemmatized/600ad"
+```
+
+
+```{r}
+library(tidyverse)
+library(quanteda)
+library(quanteda.textmodels)
+
+df <- readr::read_csv(file.path(data_path, "corpus_600ad.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(!is.na(text) & text != "") %>%
+  mutate(row_id = row_number())
+
+labels <- readr::read_csv(file.path(data_path,"corpus_600ad_labeled.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(label %in% c("christian", "non_christian")) %>%
+  transmute(id, manual_label = label) %>%
+  distinct(id, .keep_all = TRUE)
+
+df_labeled <- df %>%
+  inner_join(labels, by = "id") 
+
+```
+
+
+### Loading in the stopwowrds
+
+```{r}
+
+custom_additions <- c(
+  "m", "c", "l", "d", "gt", "lt", "br", "href", 
+  "fridericus", "heinricus", "conradus", "meus", "tuus" 
+)
+
+stops_v1 <- scan("../../data/stopwords/stopwords_latin1.txt", what = "character", quiet = TRUE, encoding = "UTF-8")
+
+stops_v2 <- scan("../../data/stopwords/stopwords_latin2.txt", what = "character", comment.char = "#", quiet = TRUE, encoding = "UTF-8")
+
+latin_stops <- c(stops_v1, stops_v2, custom_additions)
+
+latin_stops <- latin_stops[latin_stops != "*"]
+
+latin_stops <- unique(latin_stops)
+
+latin_stops <- sort(latin_stops)
+
+head(latin_stops, 200)
+
+```
+
+
+
+### Defining a tokenization function to count relative frequencies per token for the NB classifier
+
+
+```{r}
+library(quanteda)
+library(quanteda.textmodels)
+library(tidyverse)
+library(knitr)
+
+
+get_standard_dfm <- function(text_data, stop_list) {
+
+  toks <- tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
+    tokens_remove(pattern = stop_list)
+  
+
+  dfm(toks)
+}
+
+
+dfm_train <- get_standard_dfm(df_labeled$text, latin_stops)
+
+dim(dfm_train)
+
+```
+
+
+## Training classification models
+
+### Setting up model parameters
+
+```{r}
+library(tidyverse)
+library(quanteda)
+library(quanteda.textmodels)
+library(glmnet)
+library(LiblineaR)
+library(xgboost)
+library(lightgbm)
+library(Matrix)
+library(pROC)
+library(stringi)
+
+set.seed(123)
+
+checkpoint_path <- "../../results/predictions/non_transformer_lemmatized/600ad"
+output_dir <- file.path(checkpoint_path, "model_outputs_loao_author_cv")
+hyperparam_search_root <- "../../results/predictions/non_transformer_lemmatized/600ad"
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+write_csv_atomic <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  tmp <- paste0(path, ".tmp_", Sys.getpid(), "_", format(Sys.time(), "%Y%m%d%H%M%S"), ".csv")
+  readr::write_csv(x, tmp)
+  ok <- file.rename(tmp, path)
+  if (!ok) {
+    file.copy(tmp, path, overwrite = TRUE)
+    unlink(tmp)
+  }
+  invisible(path)
+}
+
+log_progress <- function(step, detail = "") {
+  message(paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", step, if (nzchar(detail)) paste0(" | ", detail) else ""))
+}
+
+safe_prob <- function(p, eps = 1e-15) pmin(pmax(as.numeric(p), eps), 1 - eps)
+safe_logit <- function(p, eps = 1e-15) qlogis(safe_prob(p, eps))
+
+check_binary_y <- function(y, where = "") {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) {
+    stop(paste0("Both classes are required", if (nzchar(where)) paste0(" in ", where) else "", "."))
+  }
+  invisible(tb)
+}
+
+auc_safe <- function(y, p) {
+  p <- safe_prob(p)
+  if (length(unique(y)) < 2) return(NA_real_)
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = p,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+auc_margin_safe <- function(y, s) {
+  s <- as.numeric(s)
+  if (length(unique(y)) < 2) return(NA_real_)
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = s,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+log_loss_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  -mean(y01 * log(p) + (1 - y01) * log(1 - p))
+}
+
+brier_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  mean((y01 - p)^2)
+}
+
+hard_metrics <- function(y, pred_label) {
+  y01 <- as.integer(y == "christian")
+  p01 <- as.integer(pred_label == "christian")
+  tp <- sum(y01 == 1 & p01 == 1)
+  tn <- sum(y01 == 0 & p01 == 0)
+  fp <- sum(y01 == 0 & p01 == 1)
+  fn <- sum(y01 == 1 & p01 == 0)
+  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
+  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
+  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else 2 * precision * recall / (precision + recall)
+  bal_acc <- mean(c(recall, specificity), na.rm = TRUE)
+  mcc_den <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  mcc <- if (mcc_den == 0) NA_real_ else ((tp * tn) - (fp * fn)) / mcc_den
+  tibble(
+    accuracy = (tp + tn) / length(y),
+    balanced_accuracy = bal_acc,
+    precision = precision,
+    recall = recall,
+    specificity = specificity,
+    f1 = f1,
+    mcc = mcc,
+    tp = tp,
+    tn = tn,
+    fp = fp,
+    fn = fn
+  )
+}
+
+choose_threshold <- function(y, p, metric = c("youden", "f1")) {
+  metric <- match.arg(metric)
+  p <- safe_prob(p)
+  if (metric == "youden") {
+    th <- tryCatch(
+      pROC::coords(
+        pROC::roc(
+          response = y,
+          predictor = p,
+          levels = c("non_christian", "christian"),
+          direction = "<",
+          quiet = TRUE
+        ),
+        x = "best",
+        input = "threshold",
+        best.method = "youden",
+        ret = "threshold",
+        transpose = FALSE
+      ),
+      error = function(e) NA_real_
+    )
+    th <- as.numeric(unlist(th))
+    th <- th[is.finite(th)]
+    if (length(th) == 0) 0.5 else th[1]
+  } else {
+    y01 <- as.integer(y == "christian")
+    cand <- sort(unique(p))
+    cand <- unique(c(0, cand, 0.5, 1))
+    f1s <- vapply(cand, function(th) {
+      pred01 <- as.integer(p >= th)
+      tp <- sum(pred01 == 1 & y01 == 1)
+      fp <- sum(pred01 == 1 & y01 == 0)
+      fn <- sum(pred01 == 0 & y01 == 1)
+      den <- 2 * tp + fp + fn
+      if (den == 0) 0 else 2 * tp / den
+    }, numeric(1))
+    cand[which.max(f1s)][1]
+  }
+}
+
+summarize_model_fold <- function(y, p, pred_youden, pred_f1, model_name, outer_fold, held_out_author) {
+  hy <- hard_metrics(y, pred_youden)
+  hf <- hard_metrics(y, pred_f1)
+  tibble(
+    outer_fold = outer_fold,
+    held_out_author = held_out_author,
+    model = model_name,
+    n = length(y),
+    n_christian = sum(y == "christian"),
+    n_non_christian = sum(y == "non_christian"),
+    auc = auc_safe(y, p),
+    log_loss = log_loss_safe(y, p),
+    brier = brier_safe(y, p),
+    accuracy_youden = hy$accuracy,
+    balanced_accuracy_youden = hy$balanced_accuracy,
+    precision_youden = hy$precision,
+    recall_youden = hy$recall,
+    specificity_youden = hy$specificity,
+    f1_youden = hy$f1,
+    mcc_youden = hy$mcc,
+    accuracy_f1 = hf$accuracy,
+    balanced_accuracy_f1 = hf$balanced_accuracy,
+    precision_f1 = hf$precision,
+    recall_f1 = hf$recall,
+    specificity_f1 = hf$specificity,
+    f1_f1 = hf$f1,
+    mcc_f1 = hf$mcc
+  )
+}
+
+summarize_model_oof <- function(y, p, pred_youden, pred_f1, model_name) {
+  hy <- hard_metrics(y, pred_youden)
+  hf <- hard_metrics(y, pred_f1)
+  tibble(
+    model = model_name,
+    auc = auc_safe(y, p),
+    log_loss = log_loss_safe(y, p),
+    brier = brier_safe(y, p),
+    accuracy_youden = hy$accuracy,
+    balanced_accuracy_youden = hy$balanced_accuracy,
+    precision_youden = hy$precision,
+    recall_youden = hy$recall,
+    specificity_youden = hy$specificity,
+    f1_youden = hy$f1,
+    mcc_youden = hy$mcc,
+    tp_youden = hy$tp,
+    tn_youden = hy$tn,
+    fp_youden = hy$fp,
+    fn_youden = hy$fn,
+    accuracy_f1 = hf$accuracy,
+    balanced_accuracy_f1 = hf$balanced_accuracy,
+    precision_f1 = hf$precision,
+    recall_f1 = hf$recall,
+    specificity_f1 = hf$specificity,
+    f1_f1 = hf$f1,
+    mcc_f1 = hf$mcc,
+    tp_f1 = hf$tp,
+    tn_f1 = hf$tn,
+    fp_f1 = hf$fp,
+    fn_f1 = hf$fn
+  )
+}
+
+fit_platt <- function(scores, y) {
+  z <- tibble(score = as.numeric(scores), y = as.integer(y == "christian")) %>%
+    filter(is.finite(score))
+  if (nrow(z) < 10 || length(unique(z$score)) < 2 || length(unique(z$y)) < 2) return(NULL)
+  suppressWarnings(
+    tryCatch({
+      fit <- glm(y ~ score, data = z, family = binomial(), control = glm.control(maxit = 200))
+      b1 <- coef(fit)[["score"]]
+      if (!is.finite(b1) || abs(b1) > 50) return(NULL)
+      fit
+    }, error = function(e) NULL)
+  )
+}
+
+apply_platt <- function(platt, scores) {
+  scores <- as.numeric(scores)
+  if (is.null(platt)) {
+    z <- as.numeric(scale(scores))
+    z[!is.finite(z)] <- 0
+    safe_prob(plogis(z))
+  } else {
+    safe_prob(predict(platt, newdata = data.frame(score = scores), type = "response"))
+  }
+}
+
+make_counts_dfm <- function(text_data, stop_list) {
+  quanteda::tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
+    quanteda::tokens_remove(pattern = stop_list) %>%
+    quanteda::dfm()
+}
+
+fit_vectorizer <- function(text_data, stop_list, min_df = 3L) {
+  x <- make_counts_dfm(text_data, stop_list)
+  if (min_df > 1L) {
+    x <- quanteda::dfm_trim(x, min_docfreq = min_df, docfreq_type = "count")
+  }
+  if (quanteda::nfeat(x) == 0) stop("No features remain after filtering.")
+  N <- quanteda::ndoc(x)
+  n_k <- quanteda::docfreq(x, scheme = "count")
+  idf <- log((N + 1) / (n_k + 1)) + 1
+  list(features = quanteda::featnames(x), idf = idf, min_df = min_df)
+}
+
+transform_counts_dfm <- function(text_data, vec, stop_list) {
+  x <- make_counts_dfm(text_data, stop_list)
+  quanteda::dfm_match(x, features = vec$features)
+}
+
+transform_tfidf_sparse <- function(text_data, vec, stop_list) {
+  x_counts <- transform_counts_dfm(text_data, vec, stop_list)
+  x_mat <- as(x_counts, "dgCMatrix")
+  if (length(x_mat@x) > 0) {
+    x_mat@x <- 1 + log(x_mat@x)
+  }
+  idf_vec <- vec$idf[match(colnames(x_mat), names(vec$idf))]
+  idf_vec[is.na(idf_vec)] <- 0
+  x_tfidf <- x_mat %*% Matrix::Diagonal(x = idf_vec)
+  colnames(x_tfidf) <- colnames(x_mat)
+  row_norms <- sqrt(Matrix::rowSums(x_tfidf^2))
+  row_norms[row_norms == 0] <- 1
+  x_tfidf <- x_tfidf / row_norms
+  Matrix::drop0(x_tfidf)
+}
+
+nb_prob_christian <- function(pred_obj) {
+  if ("christian" %in% colnames(pred_obj)) safe_prob(pred_obj[, "christian"]) else safe_prob(pred_obj[, ncol(pred_obj)])
+}
+
+fit_nb_model <- function(x_dfm, y) {
+  quanteda.textmodels::textmodel_nb(x_dfm, y)
+}
+
+predict_nb_score <- function(fit, newx_dfm) {
+  safe_logit(nb_prob_christian(predict(fit, newdata = newx_dfm, type = "probability")))
+}
+
+fit_enet_fixed <- function(x, y, alpha, lambda) {
+  glmnet::glmnet(
+    x = x,
+    y = as.integer(y == "christian"),
+    family = "binomial",
+    alpha = alpha,
+    lambda = lambda,
+    standardize = TRUE,
+    maxit = 1e6
+  )
+}
+
+predict_enet_score <- function(fit, newx) {
+  as.numeric(predict(fit, newx = newx, type = "link"))
+}
+
+predict_enet_prob <- function(fit, newx) {
+  safe_prob(as.numeric(predict(fit, newx = newx, type = "response")))
+}
+
+fit_svm_fixed <- function(x, y, cost) {
+  LiblineaR::LiblineaR(
+    data = x,
+    target = as.integer(y == "christian"),
+    type = 1,
+    cost = cost,
+    bias = TRUE,
+    verbose = FALSE
+  )
+}
+
+predict_svm_score_raw <- function(fit, newx) {
+  pred <- predict(fit, newx, decisionValues = TRUE, proba = FALSE)
+  dv <- NULL
+  if (is.list(pred) && "decisionValues" %in% names(pred)) dv <- pred$decisionValues
+  if (is.null(dv)) dv <- attr(pred, "decisionValues")
+  if (is.null(dv)) {
+    if (is.list(pred) && "predictions" %in% names(pred)) {
+      as.numeric(pred$predictions)
+    } else {
+      as.numeric(pred)
+    }
+  } else if (is.matrix(dv)) {
+    as.numeric(dv[, 1])
+  } else {
+    as.numeric(dv)
+  }
+}
+
+make_xgb_params <- function(row, scale_pos_weight = 1, seed = 123) {
+  list(
+    objective = "binary:logistic",
+    eval_metric = "logloss",
+    eta = as.numeric(row$eta[1]),
+    max_depth = as.integer(row$max_depth[1]),
+    min_child_weight = as.numeric(row$min_child_weight[1]),
+    subsample = as.numeric(row$subsample[1]),
+    colsample_bytree = as.numeric(row$colsample_bytree[1]),
+    gamma = as.numeric(row$gamma[1]),
+    lambda = 1,
+    alpha = 0,
+    scale_pos_weight = as.numeric(scale_pos_weight),
+    tree_method = "hist",
+    verbosity = 0,
+    seed = as.integer(seed)
+  )
+}
+
+fit_xgb_fixed <- function(x, y, params, nrounds, seed = 123) {
+  dtrain <- xgboost::xgb.DMatrix(x, label = as.integer(y == "christian"))
+  pars <- params
+  pars$seed <- as.integer(seed)
+  xgboost::xgb.train(
+    params = pars,
+    data = dtrain,
+    nrounds = as.integer(nrounds),
+    verbose = 0
+  )
+}
+
+predict_xgb_prob <- function(fit, newx) {
+  safe_prob(as.numeric(predict(fit, xgboost::xgb.DMatrix(newx))))
+}
+
+predict_xgb_score <- function(fit, newx) {
+  safe_logit(predict_xgb_prob(fit, newx))
+}
+
+make_lgb_params <- function(row, seed = 123) {
+  list(
+    objective = "binary",
+    metric = "binary_logloss",
+    learning_rate = as.numeric(row$learning_rate[1]),
+    num_leaves = as.integer(row$num_leaves[1]),
+    min_data_in_leaf = as.integer(row$min_data_in_leaf[1]),
+    feature_fraction = as.numeric(row$feature_fraction[1]),
+    bagging_fraction = as.numeric(row$bagging_fraction[1]),
+    bagging_freq = 1L,
+    verbosity = -1L,
+    num_threads = 0L,
+    seed = as.integer(seed),
+    feature_fraction_seed = as.integer(seed),
+    bagging_seed = as.integer(seed)
+  )
+}
+
+fit_lgb_fixed <- function(x, y, params, nrounds) {
+  dtrain <- lightgbm::lgb.Dataset(data = x, label = as.integer(y == "christian"))
+  lightgbm::lgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = as.integer(nrounds),
+    verbose = -1
+  )
+}
+
+predict_lgb_prob <- function(fit, newx, num_iteration) {
+  safe_prob(as.numeric(predict(fit, newx, num_iteration = as.integer(num_iteration))))
+}
+
+predict_lgb_score <- function(fit, newx, num_iteration) {
+  safe_logit(predict_lgb_prob(fit, newx, num_iteration = num_iteration))
+}
+
+detect_author_column <- function(df) {
+  preferred <- c(
+    "author", "author_clean", "author_name", "author_short",
+    "source_author", "creator", "source_creator",
+    "author_normalized", "canonical_author"
+  )
+  hit <- preferred[preferred %in% names(df)]
+  if (length(hit) > 0) return(hit[1])
+  rx <- names(df)[stringr::str_detect(names(df), regex("author|creator", ignore_case = TRUE))]
+  if (length(rx) > 0) return(rx[1])
+  stop("Could not detect an author column in corpus_600ad.csv.")
+}
+
+normalize_author <- function(x) {
+  x <- stri_trim_both(as.character(x))
+  x[x == "" | is.na(x)] <- NA_character_
+  x
+}
+
+make_author_cv_id <- function(x) {
+  x <- normalize_author(x)
+  y <- stringi::stri_trans_general(x, "Any-Latin; Latin-ASCII")
+  y <- tolower(y)
+  y <- gsub("[^a-z0-9]+", "_", y)
+  y <- gsub("^_+|_+$", "", y)
+  y
+}
+```
+
+```{r}
+make_logo_folds <- function(groups) {
+  gs <- unique(groups)
+  names(gs) <- gs
+  lapply(gs, function(g) which(groups == g))
+}
+
+make_group_stratified_folds <- function(groups, y, k = 5L, seed = 123) {
+  group_df <- tibble(group = groups, y = y) %>%
+    count(group, y, name = "n") %>%
+    tidyr::pivot_wider(names_from = y, values_from = n, values_fill = 0)
+
+  if (!"christian" %in% names(group_df)) group_df$christian <- 0L
+  if (!"non_christian" %in% names(group_df)) group_df$non_christian <- 0L
+
+  group_df <- group_df %>%
+    mutate(
+      christian = as.integer(christian),
+      non_christian = as.integer(non_christian),
+      n_total = christian + non_christian,
+      prop_pos = dplyr::if_else(n_total > 0, christian / n_total, 0)
+    )
+
+  n_groups <- nrow(group_df)
+  k_use <- min(as.integer(k), n_groups)
+  if (k_use < 2) return(list())
+
+  target_total <- sum(group_df$n_total) / k_use
+  target_pos <- sum(group_df$christian) / k_use
+  target_neg <- sum(group_df$non_christian) / k_use
+
+  set.seed(seed)
+  prop_center <- mean(group_df$prop_pos, na.rm = TRUE)
+
+  group_df <- group_df %>%
+    slice_sample(prop = 1) %>%
+    mutate(sort_dev = abs(prop_pos - prop_center)) %>%
+    arrange(desc(sort_dev), desc(n_total), desc(christian)) %>%
+    select(-sort_dev)
+
+  fold_stats <- tibble(
+    fold = seq_len(k_use),
+    n_total = 0,
+    christian = 0,
+    non_christian = 0
+  )
+
+  assignment <- integer(n_groups)
+
+  for (i in seq_len(n_groups)) {
+    row <- group_df[i, ]
+    losses <- vapply(seq_len(k_use), function(f) {
+      nt <- fold_stats$n_total[f] + row$n_total
+      np <- fold_stats$christian[f] + row$christian
+      nn <- fold_stats$non_christian[f] + row$non_christian
+      ((nt - target_total) / max(1, target_total))^2 +
+        ((np - target_pos) / max(1, target_pos))^2 +
+        ((nn - target_neg) / max(1, target_neg))^2
+    }, numeric(1))
+    best_fold <- which.min(losses)
+    assignment[i] <- best_fold
+    fold_stats$n_total[best_fold] <- fold_stats$n_total[best_fold] + row$n_total
+    fold_stats$christian[best_fold] <- fold_stats$christian[best_fold] + row$christian
+    fold_stats$non_christian[best_fold] <- fold_stats$non_christian[best_fold] + row$non_christian
+  }
+
+  group_df$fold <- assignment
+  lapply(split(group_df$group, group_df$fold), function(gs) which(groups %in% gs))
+}
+
+build_inner_fold_plan <- function(text, y, groups, stop_list, k = 5L, seed = 123, min_df = 3L) {
+  folds <- make_group_stratified_folds(groups, y, k = k, seed = seed)
+  plans <- list()
+  if (length(folds) == 0) return(plans)
+  idx_all <- seq_along(y)
+  ctr <- 0L
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(idx_all, va)
+    if (length(va) == 0 || length(tr) == 0) next
+    if (length(unique(y[tr])) < 2) next
+    ctr <- ctr + 1L
+    vec <- fit_vectorizer(text[tr], stop_list, min_df = min_df)
+    plans[[ctr]] <- list(
+      fold_id = j,
+      tr = tr,
+      va = va,
+      y_tr = y[tr],
+      y_va = y[va],
+      vec = vec,
+      x_tr_dfm = transform_counts_dfm(text[tr], vec, stop_list),
+      x_va_dfm = transform_counts_dfm(text[va], vec, stop_list),
+      x_tr = transform_tfidf_sparse(text[tr], vec, stop_list),
+      x_va = transform_tfidf_sparse(text[va], vec, stop_list)
+    )
+  }
+  plans
+}
+
+maybe_flip_scores <- function(scores, y) {
+  if (!all(is.finite(scores))) return(list(scores = scores, sign = 1))
+  auc0 <- auc_margin_safe(y, scores)
+  if (!is.na(auc0) && auc0 < 0.5) {
+    list(scores = -scores, sign = -1)
+  } else {
+    list(scores = scores, sign = 1)
+  }
+}
+
+cv_scores_nb <- function(plans) {
+  scores <- rep(NA_real_, max(unlist(lapply(plans, function(z) c(z$tr, z$va)))))
+  for (pl in plans) {
+    fit <- fit_nb_model(pl$x_tr_dfm, pl$y_tr)
+    scores[pl$va] <- predict_nb_score(fit, pl$x_va_dfm)
+  }
+  scores
+}
+
+cv_scores_enet <- function(plans, alpha, lambda) {
+  scores <- rep(NA_real_, max(unlist(lapply(plans, function(z) c(z$tr, z$va)))))
+  for (pl in plans) {
+    fit <- fit_enet_fixed(pl$x_tr, pl$y_tr, alpha = alpha, lambda = lambda)
+    scores[pl$va] <- predict_enet_score(fit, pl$x_va)
+  }
+  scores
+}
+
+cv_scores_svm <- function(plans, cost) {
+  scores <- rep(NA_real_, max(unlist(lapply(plans, function(z) c(z$tr, z$va)))))
+  y_all <- rep(NA_character_, length(scores))
+  for (pl in plans) {
+    fit <- fit_svm_fixed(pl$x_tr, pl$y_tr, cost = cost)
+    scores[pl$va] <- predict_svm_score_raw(fit, pl$x_va)
+    y_all[pl$va] <- pl$y_va
+  }
+  flip <- maybe_flip_scores(scores[is.finite(scores)], y_all[is.finite(scores)])
+  sign <- flip$sign
+  list(scores = sign * scores, sign = sign)
+}
+
+cv_scores_xgb <- function(plans, cand, seed = 123) {
+  scores <- rep(NA_real_, max(unlist(lapply(plans, function(z) c(z$tr, z$va)))))
+  for (j in seq_along(plans)) {
+    pl <- plans[[j]]
+    n_pos <- sum(pl$y_tr == "christian")
+    n_neg <- sum(pl$y_tr == "non_christian")
+    pars <- make_xgb_params(cand, scale_pos_weight = n_neg / max(n_pos, 1), seed = seed + j)
+    fit <- fit_xgb_fixed(pl$x_tr, pl$y_tr, params = pars, nrounds = cand$best_nrounds[1], seed = seed + j)
+    scores[pl$va] <- predict_xgb_score(fit, pl$x_va)
+  }
+  scores
+}
+
+cv_scores_lgb <- function(plans, cand, seed = 123) {
+  scores <- rep(NA_real_, max(unlist(lapply(plans, function(z) c(z$tr, z$va)))))
+  for (j in seq_along(plans)) {
+    pl <- plans[[j]]
+    pars <- make_lgb_params(cand, seed = seed + j)
+    fit <- fit_lgb_fixed(pl$x_tr, pl$y_tr, params = pars, nrounds = cand$best_nrounds[1])
+    scores[pl$va] <- predict_lgb_score(fit, pl$x_va, num_iteration = cand$best_nrounds[1])
+  }
+  scores
+}
+
+evaluate_enet_candidates <- function(plans, y, candidates) {
+  rows <- vector("list", nrow(candidates))
+  for (i in seq_len(nrow(candidates))) {
+    sc <- cv_scores_enet(plans, alpha = candidates$alpha[i], lambda = candidates$lambda[i])
+    keep <- is.finite(sc)
+    rows[[i]] <- candidates[i, , drop = FALSE] %>%
+      mutate(
+        candidate_id = i,
+        log_loss = log_loss_safe(y[keep], plogis(sc[keep])),
+        auc = auc_safe(y[keep], plogis(sc[keep]))
+      )
+  }
+  bind_rows(rows) %>% arrange(log_loss, desc(auc), alpha, desc(lambda))
+}
+
+evaluate_svm_candidates <- function(plans, y, candidates) {
+  rows <- vector("list", nrow(candidates))
+  for (i in seq_len(nrow(candidates))) {
+    sc <- cv_scores_svm(plans, cost = candidates$cost[i])
+    keep <- is.finite(sc$scores)
+    rows[[i]] <- candidates[i, , drop = FALSE] %>%
+      mutate(
+        candidate_id = i,
+        auc_margin = auc_margin_safe(y[keep], sc$scores[keep]),
+        sign = sc$sign
+      )
+  }
+  bind_rows(rows) %>% arrange(desc(auc_margin), cost)
+}
+
+evaluate_xgb_candidates <- function(plans, y, candidates, seed = 123) {
+  rows <- vector("list", nrow(candidates))
+  for (i in seq_len(nrow(candidates))) {
+    sc <- cv_scores_xgb(plans, cand = candidates[i, , drop = FALSE], seed = seed + 100L * i)
+    keep <- is.finite(sc)
+    rows[[i]] <- candidates[i, , drop = FALSE] %>%
+      mutate(
+        candidate_id = i,
+        log_loss = log_loss_safe(y[keep], plogis(sc[keep])),
+        auc = auc_safe(y[keep], plogis(sc[keep]))
+      )
+  }
+  bind_rows(rows) %>% arrange(log_loss, desc(auc), best_nrounds)
+}
+
+evaluate_lgb_candidates <- function(plans, y, candidates, seed = 123) {
+  rows <- vector("list", nrow(candidates))
+  for (i in seq_len(nrow(candidates))) {
+    sc <- cv_scores_lgb(plans, cand = candidates[i, , drop = FALSE], seed = seed + 100L * i)
+    keep <- is.finite(sc)
+    rows[[i]] <- candidates[i, , drop = FALSE] %>%
+      mutate(
+        candidate_id = i,
+        log_loss = log_loss_safe(y[keep], plogis(sc[keep])),
+        auc = auc_safe(y[keep], plogis(sc[keep]))
+      )
+  }
+  bind_rows(rows) %>% arrange(log_loss, desc(auc), best_nrounds)
+}
+```
+
+
+```{r}
+find_hyperparameter_file <- function() {
+  candidates <- c(
+    file.path(hyperparam_search_root, "model_hyperparameters_full.csv"),
+    file.path(hyperparam_search_root, "model_hyperparameters_full"),
+    "model_hyperparameters_full.csv",
+    "model_hyperparameters_full(10).csv"
+  )
+  hit <- candidates[file.exists(candidates)]
+  if (length(hit) == 0) {
+    stop("Could not find model_hyperparameters_full. Put it in ../../results/predictions or the working directory.")
+  }
+  hit[1]
+}
+
+get_hp_row <- function(hp, model_name) {
+  out <- hp %>% filter(model == model_name)
+  if (nrow(out) == 0) stop(paste("No row found in hyperparameter table for model:", model_name))
+  out[1, , drop = FALSE]
+}
+
+finite_or <- function(x, default) {
+  x <- as.numeric(x[1])
+  if (length(x) == 0 || !is.finite(x)) default else x
+}
+
+build_enet_candidates <- function(row) {
+  alpha0 <- finite_or(row$alpha, 0.2)
+  lambda0 <- finite_or(row$lambda_1se, finite_or(row$lambda_min, 0.02))
+  alpha_grid <- sort(unique(pmin(pmax(c(alpha0 / 2, alpha0, alpha0 * 2), 0.01), 0.95)))
+  lambda_grid <- sort(unique(c(lambda0 / 2, lambda0, lambda0 * 2)))
+  tidyr::crossing(alpha = alpha_grid, lambda = lambda_grid)
+}
+
+build_svm_candidates <- function(row) {
+  cost0 <- finite_or(row$cost, 1)
+  tibble(cost = sort(unique(c(cost0 / 4, cost0, cost0 * 4))))
+}
+
+build_xgb_candidates <- function(row) {
+  eta0 <- finite_or(row$eta, 0.05)
+  depth0 <- as.integer(round(finite_or(row$max_depth, 3)))
+  mcw0 <- finite_or(row$min_child_weight, 1)
+  subs0 <- finite_or(row$subsample, 0.7)
+  col0 <- finite_or(row$colsample_bytree, 0.8)
+  gam0 <- finite_or(row$gamma, 0.5)
+  nr0 <- as.integer(round(finite_or(row$best_nrounds, 400)))
+  tibble(
+    eta = c(eta0, max(0.01, eta0 / 2), min(0.2, eta0 * 2), eta0, eta0),
+    max_depth = c(depth0, depth0, depth0, max(2L, depth0 - 1L), min(10L, depth0 + 1L)),
+    min_child_weight = c(mcw0, mcw0, mcw0, max(1, mcw0 * 2), mcw0),
+    subsample = subs0,
+    colsample_bytree = col0,
+    gamma = gam0,
+    best_nrounds = nr0
+  ) %>% distinct()
+}
+
+build_lgb_candidates <- function(row) {
+  lr0 <- finite_or(row$learning_rate, 0.03)
+  leaves0 <- as.integer(round(finite_or(row$num_leaves, 31)))
+  mdl0 <- as.integer(round(finite_or(row$min_data_in_leaf, 20)))
+  ff0 <- finite_or(row$feature_fraction, 0.6)
+  bf0 <- finite_or(row$bagging_fraction, 0.7)
+  nr0 <- as.integer(round(finite_or(row$best_nrounds, 200)))
+  tibble(
+    learning_rate = c(lr0, max(0.005, lr0 / 2), min(0.1, lr0 * 2), lr0, lr0),
+    num_leaves = c(leaves0, leaves0, leaves0, max(7L, floor(leaves0 / 2)), min(127L, leaves0 * 2L)),
+    min_data_in_leaf = c(mdl0, mdl0, mdl0, mdl0, max(5L, floor(mdl0 / 2))),
+    feature_fraction = ff0,
+    bagging_fraction = bf0,
+    best_nrounds = nr0
+  ) %>% distinct()
+}
+
+save_rds_atomic <- function(object, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  tmp <- paste0(path, ".tmp_", Sys.getpid(), "_", format(Sys.time(), "%Y%m%d%H%M%S"))
+  saveRDS(object, tmp)
+  ok <- file.rename(tmp, path)
+  if (!ok) {
+    file.copy(tmp, path, overwrite = TRUE)
+    unlink(tmp)
+  }
+  invisible(path)
+}
+
+log_progress("load_data", "reading corpus and labels")
+
+df <- readr::read_csv(file.path(data_path, "corpus_600ad.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(!is.na(text) & text != "") %>%
+  mutate(row_id = row_number())
+
+author_col <- detect_author_column(df)
+
+labels_raw <- readr::read_csv(file.path(data_path, "corpus_600ad_labeled.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(label %in% c("christian", "non_christian")) %>%
+  distinct(id, label)
+
+label_conflicts <- labels_raw %>%
+  count(id, name = "n_labels") %>%
+  filter(n_labels > 1)
+
+if (nrow(label_conflicts) > 0) {
+  stop(paste0("Conflicting labels in corpus_600ad_labeled.csv: ", paste(head(label_conflicts$id, 20), collapse = ", ")))
+}
+
+labels <- labels_raw %>%
+  transmute(id, manual_label = label)
+
+df_labeled <- df %>%
+  inner_join(labels, by = "id") %>%
+  mutate(
+    author_original = normalize_author(.data[[author_col]]),
+    author_cv = make_author_cv_id(.data[[author_col]])
+  )
+
+if (any(is.na(df_labeled$author_original) | df_labeled$author_cv == "")) {
+  bad_ids <- df_labeled %>% filter(is.na(author_original) | author_cv == "") %>% pull(id)
+  stop(paste0("Missing author information for labeled documents: ", paste(head(bad_ids, 20), collapse = ", ")))
+}
+
+check_binary_y(df_labeled$manual_label, "labeled data")
+
+custom_additions <- c("m", "c", "l", "d", "gt", "lt", "br", "href", "fridericus", "heinricus", "conradus", "meus", "tuus")
+stops_v1 <- scan("../../data/stopwords/stopwords_latin1.txt", what = "character", quiet = TRUE, encoding = "UTF-8")
+stops_v2 <- scan("../../data/stopwords/stopwords_latin2.txt", what = "character", comment.char = "#", quiet = TRUE, encoding = "UTF-8")
+latin_stops <- sort(unique(c(stops_v1, stops_v2, custom_additions)))
+latin_stops <- latin_stops[latin_stops != "*"]
+
+lab <- df_labeled %>% arrange(author_cv, row_id)
+out <- df %>%
+  mutate(
+    author_original = normalize_author(.data[[author_col]]),
+    author_cv = make_author_cv_id(.data[[author_col]])
+  ) %>%
+  left_join(
+    lab %>% select(row_id, manual_label),
+    by = "row_id"
+  )
+
+hp_path <- find_hyperparameter_file()
+hyperparameters_full <- readr::read_csv(hp_path, show_col_types = FALSE)
+
+enet_candidates_all <- build_enet_candidates(get_hp_row(hyperparameters_full, "elastic_net"))
+svm_candidates_all  <- build_svm_candidates(get_hp_row(hyperparameters_full, "svm_platt"))
+xgb_candidates_all  <- build_xgb_candidates(get_hp_row(hyperparameters_full, "xgboost"))
+lgb_candidates_all  <- build_lgb_candidates(get_hp_row(hyperparameters_full, "lightgbm"))
+
+outer_folds <- make_logo_folds(lab$author_cv)
+held_out_authors <- names(outer_folds)
+n_lab <- nrow(lab)
+
+oof <- tibble(
+  row_id = lab$row_id,
+  id = lab$id,
+  author_original = lab$author_original,
+  author_cv = lab$author_cv,
+  manual_label = lab$manual_label,
+  outer_fold = NA_integer_,
+  held_out_author = NA_character_,
+  nb_oof = NA_real_,
+  nb_score_oof = NA_real_,
+  nb_pred_youden_oof = NA_character_,
+  nb_pred_f1_oof = NA_character_,
+  prob_enet = NA_real_,
+  score_enet_logit = NA_real_,
+  label_enet_youden = NA_character_,
+  label_enet_f1 = NA_character_,
+  svm_oof = NA_real_,
+  svm_score_oof = NA_real_,
+  svm_pred_youden_oof = NA_character_,
+  svm_pred_f1_oof = NA_character_,
+  xgb_oof = NA_real_,
+  xgb_score_oof = NA_real_,
+  xgb_pred_youden_oof = NA_character_,
+  xgb_pred_f1_oof = NA_character_,
+  lgb_oof = NA_real_,
+  lgb_score_oof = NA_real_,
+  lgb_pred_youden_oof = NA_character_,
+  lgb_pred_f1_oof = NA_character_
+)
+
+START_FROM_SCRATCH <- FALSE
+SAVE_FOLD_FITS <- TRUE
+
+checkpoint_dir <- file.path(output_dir, "_checkpoints")
+fold_checkpoint_dir <- file.path(checkpoint_dir, "outer_folds")
+full_checkpoint_dir <- file.path(checkpoint_dir, "full_refit")
+
+if (isTRUE(START_FROM_SCRATCH)) {
+  unlink(checkpoint_dir, recursive = TRUE, force = TRUE)
+  unlink(file.path(output_dir, c(
+    "oof_predictions_labeled.csv",
+    "outer_fold_metrics.csv",
+    "outer_thresholds.csv",
+    "selected_outer_hyperparameters.csv",
+    "oof_model_metrics.csv",
+    "full_corpus_model_scores.csv",
+    "loao_run_metadata.rds"
+  )), force = TRUE)
+}
+
+dir.create(fold_checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(full_checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
+
+safe_bind_rows <- function(xs) {
+  if (length(xs) == 0) tibble() else dplyr::bind_rows(xs)
+}
+
+read_rds_or_null <- function(path) {
+  if (!file.exists(path)) return(NULL)
+  tryCatch(readRDS(path), error = function(e) NULL)
+}
+
+fold_checkpoint_file <- function(i, held_out_author) {
+  file.path(fold_checkpoint_dir, sprintf("outer_fold_%04d_%s.rds", as.integer(i), held_out_author))
+}
+
+valid_fold_checkpoint <- function(z, i, va, oof_cols) {
+  is.list(z) &&
+    !is.null(z$outer_fold) && as.integer(z$outer_fold) == as.integer(i) &&
+    !is.null(z$va) && identical(as.integer(z$va), as.integer(va)) &&
+    is.data.frame(z$oof_rows) && nrow(z$oof_rows) == length(va) &&
+    all(oof_cols %in% names(z$oof_rows)) &&
+    is.data.frame(z$fold_metrics) &&
+    is.data.frame(z$thresholds) &&
+    is.data.frame(z$selected_hyperparameters)
+}
+
+fold_metric_rows <- list()
+threshold_rows <- list()
+selected_rows <- list()
+
+existing_oof_path <- file.path(output_dir, "oof_predictions_labeled.csv")
+existing_metrics_path <- file.path(output_dir, "outer_fold_metrics.csv")
+existing_thresholds_path <- file.path(output_dir, "outer_thresholds.csv")
+existing_selected_path <- file.path(output_dir, "selected_outer_hyperparameters.csv")
+
+if (!isTRUE(START_FROM_SCRATCH) && file.exists(existing_oof_path)) {
+  old_oof <- suppressMessages(readr::read_csv(existing_oof_path, show_col_types = FALSE))
+  if (all(names(oof) %in% names(old_oof)) && identical(as.character(old_oof$row_id), as.character(oof$row_id))) {
+    oof <- old_oof[, names(oof)]
+    log_progress("resume_csv", "loaded existing oof_predictions_labeled.csv")
+  } else {
+    log_progress("resume_csv_ignored", "existing oof_predictions_labeled.csv does not match current rows/columns")
+  }
+}
+
+if (!isTRUE(START_FROM_SCRATCH) && file.exists(existing_metrics_path)) {
+  fold_metric_rows <- list(suppressMessages(readr::read_csv(existing_metrics_path, show_col_types = FALSE)))
+}
+if (!isTRUE(START_FROM_SCRATCH) && file.exists(existing_thresholds_path)) {
+  threshold_rows <- list(suppressMessages(readr::read_csv(existing_thresholds_path, show_col_types = FALSE)))
+}
+if (!isTRUE(START_FROM_SCRATCH) && file.exists(existing_selected_path)) {
+  selected_rows <- list(suppressMessages(readr::read_csv(existing_selected_path, show_col_types = FALSE)))
+}
+
+oof_complete_cols <- c(
+  "nb_oof", "nb_score_oof", "nb_pred_youden_oof", "nb_pred_f1_oof",
+  "prob_enet", "score_enet_logit", "label_enet_youden", "label_enet_f1",
+  "svm_oof", "svm_score_oof", "svm_pred_youden_oof", "svm_pred_f1_oof",
+  "xgb_oof", "xgb_score_oof", "xgb_pred_youden_oof", "xgb_pred_f1_oof",
+  "lgb_oof", "lgb_score_oof", "lgb_pred_youden_oof", "lgb_pred_f1_oof"
+)
+
+fold_complete_in_oof <- function(va) {
+  all(oof_complete_cols %in% names(oof)) &&
+    all(!is.na(oof$outer_fold[va])) &&
+    all(vapply(oof[va, oof_complete_cols], function(x) all(!is.na(x)), logical(1)))
+}
+
+write_outer_progress <- function() {
+  fm <- safe_bind_rows(fold_metric_rows)
+  th <- safe_bind_rows(threshold_rows)
+  se <- safe_bind_rows(selected_rows)
+
+  if (all(c("outer_fold", "model") %in% names(fm))) {
+    fm <- fm %>% distinct(outer_fold, model, .keep_all = TRUE)
+  }
+  if (all(c("outer_fold", "model") %in% names(th))) {
+    th <- th %>% distinct(outer_fold, model, .keep_all = TRUE)
+  }
+  if (all(c("outer_fold", "model") %in% names(se))) {
+    se <- se %>% distinct(outer_fold, model, .keep_all = TRUE)
+  }
+
+  write_csv_atomic(oof, file.path(output_dir, "oof_predictions_labeled.csv"))
+  write_csv_atomic(fm, file.path(output_dir, "outer_fold_metrics.csv"))
+  write_csv_atomic(th, file.path(output_dir, "outer_thresholds.csv"))
+  write_csv_atomic(se, file.path(output_dir, "selected_outer_hyperparameters.csv"))
+}
+
+merge_fold_checkpoint <- function(z) {
+  oof[z$va, ] <<- z$oof_rows[, names(oof)]
+  fold_metric_rows[[length(fold_metric_rows) + 1L]] <<- z$fold_metrics
+  threshold_rows[[length(threshold_rows) + 1L]] <<- z$thresholds
+  selected_rows[[length(selected_rows) + 1L]] <<- z$selected_hyperparameters
+}
+
+for (i in seq_along(outer_folds)) {
+  va <- outer_folds[[i]]
+  tr <- setdiff(seq_len(n_lab), va)
+  held_out_author <- held_out_authors[i]
+  fold_file <- fold_checkpoint_file(i, held_out_author)
+  old_fold <- read_rds_or_null(fold_file)
+
+  if (valid_fold_checkpoint(old_fold, i, va, names(oof))) {
+    log_progress("outer_fold_skip", paste("fold", i, "of", length(outer_folds), "| held-out author =", held_out_author))
+    merge_fold_checkpoint(old_fold)
+    write_outer_progress()
+    next
+  }
+
+  if (fold_complete_in_oof(va)) {
+    log_progress("outer_fold_skip_csv", paste("fold", i, "of", length(outer_folds), "| held-out author =", held_out_author))
+    write_outer_progress()
+    next
+  }
+
+  log_progress("outer_fold_start", paste("fold", i, "of", length(outer_folds), "| held-out author =", held_out_author))
+
+  y_tr <- lab$manual_label[tr]
+  y_va <- lab$manual_label[va]
+  check_binary_y(y_tr, paste("outer train fold", i))
+
+  vec_outer <- fit_vectorizer(lab$text[tr], latin_stops, min_df = 3L)
+  x_tr_dfm <- transform_counts_dfm(lab$text[tr], vec_outer, latin_stops)
+  x_va_dfm <- transform_counts_dfm(lab$text[va], vec_outer, latin_stops)
+  x_tr <- transform_tfidf_sparse(lab$text[tr], vec_outer, latin_stops)
+  x_va <- transform_tfidf_sparse(lab$text[va], vec_outer, latin_stops)
+
+  inner_plans <- build_inner_fold_plan(
+    text = lab$text[tr],
+    y = y_tr,
+    groups = lab$author_cv[tr],
+    stop_list = latin_stops,
+    k = 5L,
+    seed = 1000 + i,
+    min_df = 3L
+  )
+
+  if (length(inner_plans) == 0) {
+    stop(paste("No valid author-blocked inner folds for outer fold", i))
+  }
+
+  oof$outer_fold[va] <- i
+  oof$held_out_author[va] <- held_out_author
+
+  fold_metrics_this <- list()
+  thresholds_this <- list()
+  selected_this <- list()
+
+  nb_train_scores <- cv_scores_nb(inner_plans)
+  nb_platt <- fit_platt(nb_train_scores, y_tr)
+  nb_fit <- fit_nb_model(x_tr_dfm, y_tr)
+  nb_va_scores <- predict_nb_score(nb_fit, x_va_dfm)
+  nb_train_prob <- apply_platt(nb_platt, nb_train_scores)
+  nb_va_prob <- apply_platt(nb_platt, nb_va_scores)
+  nb_th_y <- choose_threshold(y_tr, nb_train_prob, "youden")
+  nb_th_f <- choose_threshold(y_tr, nb_train_prob, "f1")
+
+  oof$nb_oof[va] <- nb_va_prob
+  oof$nb_score_oof[va] <- nb_va_scores
+  oof$nb_pred_youden_oof[va] <- ifelse(nb_va_prob >= nb_th_y, "christian", "non_christian")
+  oof$nb_pred_f1_oof[va] <- ifelse(nb_va_prob >= nb_th_f, "christian", "non_christian")
+
+  fold_metrics_this[[length(fold_metrics_this) + 1L]] <- summarize_model_fold(
+    y_va, nb_va_prob, oof$nb_pred_youden_oof[va], oof$nb_pred_f1_oof[va], "naive_bayes", i, held_out_author
+  )
+  thresholds_this[[length(thresholds_this) + 1L]] <- tibble(
+    outer_fold = i, held_out_author = held_out_author, model = "naive_bayes",
+    threshold_youden = nb_th_y, threshold_f1 = nb_th_f
+  )
+  selected_this[[length(selected_this) + 1L]] <- tibble(
+    outer_fold = i, held_out_author = held_out_author, model = "naive_bayes"
+  )
+
+  enet_eval <- evaluate_enet_candidates(inner_plans, y_tr, enet_candidates_all)
+  enet_best <- enet_eval[1, , drop = FALSE]
+  enet_train_scores <- cv_scores_enet(inner_plans, alpha = enet_best$alpha[1], lambda = enet_best$lambda[1])
+  enet_platt <- fit_platt(enet_train_scores, y_tr)
+  enet_fit <- fit_enet_fixed(x_tr, y_tr, alpha = enet_best$alpha[1], lambda = enet_best$lambda[1])
+  enet_va_scores <- predict_enet_score(enet_fit, x_va)
+  enet_train_prob <- apply_platt(enet_platt, enet_train_scores)
+  enet_va_prob <- apply_platt(enet_platt, enet_va_scores)
+  enet_th_y <- choose_threshold(y_tr, enet_train_prob, "youden")
+  enet_th_f <- choose_threshold(y_tr, enet_train_prob, "f1")
+
+  oof$prob_enet[va] <- enet_va_prob
+  oof$score_enet_logit[va] <- enet_va_scores
+  oof$label_enet_youden[va] <- ifelse(enet_va_prob >= enet_th_y, "christian", "non_christian")
+  oof$label_enet_f1[va] <- ifelse(enet_va_prob >= enet_th_f, "christian", "non_christian")
+
+  fold_metrics_this[[length(fold_metrics_this) + 1L]] <- summarize_model_fold(
+    y_va, enet_va_prob, oof$label_enet_youden[va], oof$label_enet_f1[va], "enet", i, held_out_author
+  )
+  thresholds_this[[length(thresholds_this) + 1L]] <- tibble(
+    outer_fold = i, held_out_author = held_out_author, model = "enet",
+    threshold_youden = enet_th_y, threshold_f1 = enet_th_f
+  )
+  selected_this[[length(selected_this) + 1L]] <- enet_best %>%
+    mutate(outer_fold = i, held_out_author = held_out_author, model = "enet")
+
+  svm_eval <- evaluate_svm_candidates(inner_plans, y_tr, svm_candidates_all)
+  svm_best <- svm_eval[1, , drop = FALSE]
+  svm_train_res <- cv_scores_svm(inner_plans, cost = svm_best$cost[1])
+  svm_train_scores <- svm_train_res$scores
+  svm_platt <- fit_platt(svm_train_scores, y_tr)
+  svm_fit <- fit_svm_fixed(x_tr, y_tr, cost = svm_best$cost[1])
+  svm_va_scores <- svm_best$sign[1] * predict_svm_score_raw(svm_fit, x_va)
+  svm_train_prob <- apply_platt(svm_platt, svm_train_scores)
+  svm_va_prob <- apply_platt(svm_platt, svm_va_scores)
+  svm_th_y <- choose_threshold(y_tr, svm_train_prob, "youden")
+  svm_th_f <- choose_threshold(y_tr, svm_train_prob, "f1")
+
+  oof$svm_oof[va] <- svm_va_prob
+  oof$svm_score_oof[va] <- svm_va_scores
+  oof$svm_pred_youden_oof[va] <- ifelse(svm_va_prob >= svm_th_y, "christian", "non_christian")
+  oof$svm_pred_f1_oof[va] <- ifelse(svm_va_prob >= svm_th_f, "christian", "non_christian")
+
+  fold_metrics_this[[length(fold_metrics_this) + 1L]] <- summarize_model_fold(
+    y_va, svm_va_prob, oof$svm_pred_youden_oof[va], oof$svm_pred_f1_oof[va], "svm_platt", i, held_out_author
+  )
+  thresholds_this[[length(thresholds_this) + 1L]] <- tibble(
+    outer_fold = i, held_out_author = held_out_author, model = "svm_platt",
+    threshold_youden = svm_th_y, threshold_f1 = svm_th_f
+  )
+  selected_this[[length(selected_this) + 1L]] <- svm_best %>%
+    mutate(outer_fold = i, held_out_author = held_out_author, model = "svm_platt")
+
+  xgb_eval <- evaluate_xgb_candidates(inner_plans, y_tr, xgb_candidates_all, seed = 2000 + i)
+  xgb_best <- xgb_eval[1, , drop = FALSE]
+  xgb_train_scores <- cv_scores_xgb(inner_plans, cand = xgb_best, seed = 3000 + i)
+  xgb_platt <- fit_platt(xgb_train_scores, y_tr)
+  n_pos_tr <- sum(y_tr == "christian")
+  n_neg_tr <- sum(y_tr == "non_christian")
+  xgb_params <- make_xgb_params(xgb_best, scale_pos_weight = n_neg_tr / max(n_pos_tr, 1), seed = 4000 + i)
+  xgb_fit <- fit_xgb_fixed(x_tr, y_tr, params = xgb_params, nrounds = xgb_best$best_nrounds[1], seed = 4000 + i)
+  xgb_va_scores <- predict_xgb_score(xgb_fit, x_va)
+  xgb_train_prob <- apply_platt(xgb_platt, xgb_train_scores)
+  xgb_va_prob <- apply_platt(xgb_platt, xgb_va_scores)
+  xgb_th_y <- choose_threshold(y_tr, xgb_train_prob, "youden")
+  xgb_th_f <- choose_threshold(y_tr, xgb_train_prob, "f1")
+
+  oof$xgb_oof[va] <- xgb_va_prob
+  oof$xgb_score_oof[va] <- xgb_va_scores
+  oof$xgb_pred_youden_oof[va] <- ifelse(xgb_va_prob >= xgb_th_y, "christian", "non_christian")
+  oof$xgb_pred_f1_oof[va] <- ifelse(xgb_va_prob >= xgb_th_f, "christian", "non_christian")
+
+  fold_metrics_this[[length(fold_metrics_this) + 1L]] <- summarize_model_fold(
+    y_va, xgb_va_prob, oof$xgb_pred_youden_oof[va], oof$xgb_pred_f1_oof[va], "xgboost", i, held_out_author
+  )
+  thresholds_this[[length(thresholds_this) + 1L]] <- tibble(
+    outer_fold = i, held_out_author = held_out_author, model = "xgboost",
+    threshold_youden = xgb_th_y, threshold_f1 = xgb_th_f
+  )
+  selected_this[[length(selected_this) + 1L]] <- xgb_best %>%
+    mutate(outer_fold = i, held_out_author = held_out_author, model = "xgboost")
+
+  lgb_eval <- evaluate_lgb_candidates(inner_plans, y_tr, lgb_candidates_all, seed = 5000 + i)
+  lgb_best <- lgb_eval[1, , drop = FALSE]
+  lgb_train_scores <- cv_scores_lgb(inner_plans, cand = lgb_best, seed = 6000 + i)
+  lgb_platt <- fit_platt(lgb_train_scores, y_tr)
+  lgb_params <- make_lgb_params(lgb_best, seed = 7000 + i)
+  lgb_fit <- fit_lgb_fixed(x_tr, y_tr, params = lgb_params, nrounds = lgb_best$best_nrounds[1])
+  lgb_va_scores <- predict_lgb_score(lgb_fit, x_va, num_iteration = lgb_best$best_nrounds[1])
+  lgb_train_prob <- apply_platt(lgb_platt, lgb_train_scores)
+  lgb_va_prob <- apply_platt(lgb_platt, lgb_va_scores)
+  lgb_th_y <- choose_threshold(y_tr, lgb_train_prob, "youden")
+  lgb_th_f <- choose_threshold(y_tr, lgb_train_prob, "f1")
+
+  oof$lgb_oof[va] <- lgb_va_prob
+  oof$lgb_score_oof[va] <- lgb_va_scores
+  oof$lgb_pred_youden_oof[va] <- ifelse(lgb_va_prob >= lgb_th_y, "christian", "non_christian")
+  oof$lgb_pred_f1_oof[va] <- ifelse(lgb_va_prob >= lgb_th_f, "christian", "non_christian")
+
+  fold_metrics_this[[length(fold_metrics_this) + 1L]] <- summarize_model_fold(
+    y_va, lgb_va_prob, oof$lgb_pred_youden_oof[va], oof$lgb_pred_f1_oof[va], "lightgbm", i, held_out_author
+  )
+  thresholds_this[[length(thresholds_this) + 1L]] <- tibble(
+    outer_fold = i, held_out_author = held_out_author, model = "lightgbm",
+    threshold_youden = lgb_th_y, threshold_f1 = lgb_th_f
+  )
+  selected_this[[length(selected_this) + 1L]] <- lgb_best %>%
+    mutate(outer_fold = i, held_out_author = held_out_author, model = "lightgbm")
+
+  fold_result <- list(
+    completed_at = Sys.time(),
+    outer_fold = i,
+    held_out_author = held_out_author,
+    va = va,
+    row_id = lab$row_id[va],
+    id = lab$id[va],
+    oof_rows = oof[va, ],
+    fold_metrics = safe_bind_rows(fold_metrics_this),
+    thresholds = safe_bind_rows(thresholds_this),
+    selected_hyperparameters = safe_bind_rows(selected_this),
+    fits = if (isTRUE(SAVE_FOLD_FITS)) list(
+      vectorizer = vec_outer,
+      naive_bayes = list(fit = nb_fit, platt = nb_platt, threshold_youden = nb_th_y, threshold_f1 = nb_th_f),
+      enet = list(fit = enet_fit, platt = enet_platt, selected = enet_best, threshold_youden = enet_th_y, threshold_f1 = enet_th_f),
+      svm_platt = list(fit = svm_fit, platt = svm_platt, selected = svm_best, threshold_youden = svm_th_y, threshold_f1 = svm_th_f),
+      xgboost = list(fit = xgb_fit, platt = xgb_platt, selected = xgb_best, params = xgb_params, threshold_youden = xgb_th_y, threshold_f1 = xgb_th_f),
+      lightgbm = list(fit = lgb_fit, platt = lgb_platt, selected = lgb_best, params = lgb_params, threshold_youden = lgb_th_y, threshold_f1 = lgb_th_f)
+    ) else NULL
+  )
+
+  save_rds_atomic(fold_result, fold_file)
+  merge_fold_checkpoint(fold_result)
+  write_outer_progress()
+
+  log_progress("outer_fold_done", paste("fold", i, "of", length(outer_folds), "| held-out author =", held_out_author))
+}
+
+oof_metrics <- bind_rows(
+  summarize_model_oof(oof$manual_label, oof$nb_oof, oof$nb_pred_youden_oof, oof$nb_pred_f1_oof, "naive_bayes"),
+  summarize_model_oof(oof$manual_label, oof$prob_enet, oof$label_enet_youden, oof$label_enet_f1, "enet"),
+  summarize_model_oof(oof$manual_label, oof$svm_oof, oof$svm_pred_youden_oof, oof$svm_pred_f1_oof, "svm_platt"),
+  summarize_model_oof(oof$manual_label, oof$xgb_oof, oof$xgb_pred_youden_oof, oof$xgb_pred_f1_oof, "xgboost"),
+  summarize_model_oof(oof$manual_label, oof$lgb_oof, oof$lgb_pred_youden_oof, oof$lgb_pred_f1_oof, "lightgbm")
+)
+
+write_csv_atomic(oof_metrics, file.path(output_dir, "oof_model_metrics.csv"))
+
+full_vec <- fit_vectorizer(lab$text, latin_stops, min_df = 3L)
+x_lab_dfm_full <- transform_counts_dfm(lab$text, full_vec, latin_stops)
+x_all_dfm_full <- transform_counts_dfm(out$text, full_vec, latin_stops)
+x_lab_full <- transform_tfidf_sparse(lab$text, full_vec, latin_stops)
+x_all_full <- transform_tfidf_sparse(out$text, full_vec, latin_stops)
+
+full_inner_plans <- build_inner_fold_plan(
+  text = lab$text,
+  y = lab$manual_label,
+  groups = lab$author_cv,
+  stop_list = latin_stops,
+  k = 5L,
+  seed = 9100,
+  min_df = 3L
+)
+
+if (length(full_inner_plans) == 0) {
+  stop("No valid author-blocked inner folds for full-data refit.")
+}
+
+full_base <- tibble(
+  row_id = out$row_id,
+  id = out$id,
+  author_original = out$author_original,
+  author_cv = out$author_cv,
+  manual_label = out$manual_label
+)
+
+full_state_file <- file.path(full_checkpoint_dir, "full_refit_state.rds")
+full_state <- read_rds_or_null(full_state_file)
+
+if (is.list(full_state) && is.data.frame(full_state$full_predictions)) {
+  full_predictions <- full_state$full_predictions
+  full_done <- unique(as.character(full_state$done))
+  full_selected <- full_state$selected
+  if (!is.list(full_selected)) full_selected <- list()
+  log_progress("full_refit_resume", paste("completed models =", paste(full_done, collapse = ", ")))
+} else {
+  full_predictions <- full_base
+  full_done <- character()
+  full_selected <- list()
+}
+
+save_full_state <- function() {
+  save_rds_atomic(
+    list(
+      updated_at = Sys.time(),
+      done = unique(full_done),
+      full_predictions = full_predictions,
+      selected = full_selected
+    ),
+    full_state_file
+  )
+  write_csv_atomic(full_predictions, file.path(output_dir, "full_corpus_model_scores.csv"))
+}
+
+save_rds_atomic(
+  list(
+    created_at = Sys.time(),
+    hyperparameter_source = hp_path,
+    vectorizer = full_vec,
+    enet_candidates = enet_candidates_all,
+    svm_candidates = svm_candidates_all,
+    xgb_candidates = xgb_candidates_all,
+    lgb_candidates = lgb_candidates_all
+  ),
+  file.path(full_checkpoint_dir, "full_refit_common.rds")
+)
+
+if ("naive_bayes" %in% full_done && all(c("nb_score", "nb_prob") %in% names(full_predictions))) {
+  log_progress("full_refit_skip", "naive_bayes")
+} else {
+  log_progress("full_refit_start", "naive_bayes")
+  nb_full_train_scores <- cv_scores_nb(full_inner_plans)
+  nb_full_platt <- fit_platt(nb_full_train_scores, lab$manual_label)
+  nb_full_fit <- fit_nb_model(x_lab_dfm_full, lab$manual_label)
+  nb_all_scores <- predict_nb_score(nb_full_fit, x_all_dfm_full)
+  full_predictions <- full_predictions %>%
+    mutate(
+      nb_score = nb_all_scores,
+      nb_prob = apply_platt(nb_full_platt, nb_all_scores)
+    )
+  save_rds_atomic(
+    list(model = "naive_bayes", fit = nb_full_fit, platt = nb_full_platt, vectorizer = full_vec),
+    file.path(full_checkpoint_dir, "full_naive_bayes_fit.rds")
+  )
+  full_done <- union(full_done, "naive_bayes")
+  save_full_state()
+}
+
+if ("enet" %in% full_done && all(c("score_enet_logit", "prob_enet") %in% names(full_predictions))) {
+  log_progress("full_refit_skip", "enet")
+} else {
+  log_progress("full_refit_start", "enet")
+  enet_full_eval <- evaluate_enet_candidates(full_inner_plans, lab$manual_label, enet_candidates_all)
+  enet_full_best <- enet_full_eval[1, , drop = FALSE]
+  enet_full_train_scores <- cv_scores_enet(full_inner_plans, alpha = enet_full_best$alpha[1], lambda = enet_full_best$lambda[1])
+  enet_full_platt <- fit_platt(enet_full_train_scores, lab$manual_label)
+  enet_full_fit <- fit_enet_fixed(x_lab_full, lab$manual_label, alpha = enet_full_best$alpha[1], lambda = enet_full_best$lambda[1])
+  enet_all_scores <- predict_enet_score(enet_full_fit, x_all_full)
+  full_predictions <- full_predictions %>%
+    mutate(
+      score_enet_logit = enet_all_scores,
+      prob_enet = apply_platt(enet_full_platt, enet_all_scores)
+    )
+  full_selected$enet <- enet_full_best
+  save_rds_atomic(
+    list(model = "enet", fit = enet_full_fit, platt = enet_full_platt, selected = enet_full_best, vectorizer = full_vec),
+    file.path(full_checkpoint_dir, "full_enet_fit.rds")
+  )
+  full_done <- union(full_done, "enet")
+  save_full_state()
+}
+
+if ("svm_platt" %in% full_done && all(c("svm_score", "svm_prob") %in% names(full_predictions))) {
+  log_progress("full_refit_skip", "svm_platt")
+} else {
+  log_progress("full_refit_start", "svm_platt")
+  svm_full_eval <- evaluate_svm_candidates(full_inner_plans, lab$manual_label, svm_candidates_all)
+  svm_full_best <- svm_full_eval[1, , drop = FALSE]
+  svm_full_train_res <- cv_scores_svm(full_inner_plans, cost = svm_full_best$cost[1])
+  svm_full_platt <- fit_platt(svm_full_train_res$scores, lab$manual_label)
+  svm_full_fit <- fit_svm_fixed(x_lab_full, lab$manual_label, cost = svm_full_best$cost[1])
+  svm_all_scores <- svm_full_best$sign[1] * predict_svm_score_raw(svm_full_fit, x_all_full)
+  full_predictions <- full_predictions %>%
+    mutate(
+      svm_score = svm_all_scores,
+      svm_prob = apply_platt(svm_full_platt, svm_all_scores)
+    )
+  full_selected$svm_platt <- svm_full_best
+  save_rds_atomic(
+    list(model = "svm_platt", fit = svm_full_fit, platt = svm_full_platt, selected = svm_full_best, vectorizer = full_vec),
+    file.path(full_checkpoint_dir, "full_svm_platt_fit.rds")
+  )
+  full_done <- union(full_done, "svm_platt")
+  save_full_state()
+}
+
+if ("xgboost" %in% full_done && all(c("xgb_score", "xgb_prob") %in% names(full_predictions))) {
+  log_progress("full_refit_skip", "xgboost")
+} else {
+  log_progress("full_refit_start", "xgboost")
+  xgb_full_eval <- evaluate_xgb_candidates(full_inner_plans, lab$manual_label, xgb_candidates_all, seed = 9200)
+  xgb_full_best <- xgb_full_eval[1, , drop = FALSE]
+  xgb_full_train_scores <- cv_scores_xgb(full_inner_plans, cand = xgb_full_best, seed = 9300)
+  xgb_full_platt <- fit_platt(xgb_full_train_scores, lab$manual_label)
+  xgb_n_pos <- sum(lab$manual_label == "christian")
+  xgb_n_neg <- sum(lab$manual_label == "non_christian")
+  xgb_full_params <- make_xgb_params(xgb_full_best, scale_pos_weight = xgb_n_neg / max(xgb_n_pos, 1), seed = 9400)
+  xgb_full_fit <- fit_xgb_fixed(x_lab_full, lab$manual_label, params = xgb_full_params, nrounds = xgb_full_best$best_nrounds[1], seed = 9400)
+  xgb_all_scores <- predict_xgb_score(xgb_full_fit, x_all_full)
+  full_predictions <- full_predictions %>%
+    mutate(
+      xgb_score = xgb_all_scores,
+      xgb_prob = apply_platt(xgb_full_platt, xgb_all_scores)
+    )
+  full_selected$xgboost <- xgb_full_best
+  save_rds_atomic(
+    list(model = "xgboost", fit = xgb_full_fit, platt = xgb_full_platt, selected = xgb_full_best, params = xgb_full_params, vectorizer = full_vec),
+    file.path(full_checkpoint_dir, "full_xgboost_fit.rds")
+  )
+  full_done <- union(full_done, "xgboost")
+  save_full_state()
+}
+
+if ("lightgbm" %in% full_done && all(c("lgb_score", "lgb_prob") %in% names(full_predictions))) {
+  log_progress("full_refit_skip", "lightgbm")
+} else {
+  log_progress("full_refit_start", "lightgbm")
+  lgb_full_eval <- evaluate_lgb_candidates(full_inner_plans, lab$manual_label, lgb_candidates_all, seed = 9500)
+  lgb_full_best <- lgb_full_eval[1, , drop = FALSE]
+  lgb_full_train_scores <- cv_scores_lgb(full_inner_plans, cand = lgb_full_best, seed = 9600)
+  lgb_full_platt <- fit_platt(lgb_full_train_scores, lab$manual_label)
+  lgb_full_params <- make_lgb_params(lgb_full_best, seed = 9700)
+  lgb_full_fit <- fit_lgb_fixed(x_lab_full, lab$manual_label, params = lgb_full_params, nrounds = lgb_full_best$best_nrounds[1])
+  lgb_all_scores <- predict_lgb_score(lgb_full_fit, x_all_full, num_iteration = lgb_full_best$best_nrounds[1])
+  full_predictions <- full_predictions %>%
+    mutate(
+      lgb_score = lgb_all_scores,
+      lgb_prob = apply_platt(lgb_full_platt, lgb_all_scores)
+    )
+  full_selected$lightgbm <- lgb_full_best
+  save_rds_atomic(
+    list(model = "lightgbm", fit = lgb_full_fit, platt = lgb_full_platt, selected = lgb_full_best, params = lgb_full_params, vectorizer = full_vec),
+    file.path(full_checkpoint_dir, "full_lightgbm_fit.rds")
+  )
+  full_done <- union(full_done, "lightgbm")
+  save_full_state()
+}
+
+save_full_state()
+
+save_rds_atomic(
+  list(
+    completed_at = Sys.time(),
+    hyperparameter_source = hp_path,
+    enet_candidates = enet_candidates_all,
+    svm_candidates = svm_candidates_all,
+    xgb_candidates = xgb_candidates_all,
+    lgb_candidates = lgb_candidates_all,
+    full_selected = full_selected,
+    outer_fold_checkpoints = list.files(fold_checkpoint_dir, pattern = "^outer_fold_.*\\.rds$", full.names = TRUE),
+    full_refit_checkpoints = list.files(full_checkpoint_dir, pattern = "\\.rds$", full.names = TRUE)
+  ),
+  file.path(output_dir, "loao_run_metadata.rds")
+)
+
+log_progress("done", "leave-one-author-out run completed")
+
+```
+
+```{r}
+# ============================================================
+# LOAO author-CV visual diagnostics
+# No ensemble, no figure titles/subtitles
+# ============================================================
+
+library(tidyverse)
+library(scales)
+library(pROC)
+library(forcats)
+library(stringr)
+
+if (!exists("output_dir")) {
+  output_dir <- file.path(results_path, "model_outputs_loao_author_cv")
+}
+
+loao_plot_dir <- file.path(output_dir, "plots_loao_author_cv")
+loao_table_dir <- file.path(output_dir, "tables_loao_author_cv")
+
+dir.create(loao_plot_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(loao_table_dir, recursive = TRUE, showWarnings = FALSE)
+
+read_loao <- function(object_name, file_name) {
+  path <- file.path(output_dir, file_name)
+
+  if (file.exists(path)) {
+    return(readr::read_csv(path, show_col_types = FALSE))
+  }
+
+  if (exists(object_name, inherits = TRUE)) {
+    x <- get(object_name, inherits = TRUE)
+    if (is.list(x) && !is.data.frame(x)) return(dplyr::bind_rows(x))
+    return(tibble::as_tibble(x))
+  }
+
+  stop("Could not find ", file_name, " or object `", object_name, "`.")
+}
+
+clip_prob <- function(p, eps = 1e-15) {
+  pmin(pmax(as.numeric(p), eps), 1 - eps)
+}
+
+log_loss_vec <- function(y, p) {
+  p <- clip_prob(p)
+  y01 <- as.integer(y == "christian")
+  -mean(y01 * log(p) + (1 - y01) * log(1 - p), na.rm = TRUE)
+}
+
+brier_vec <- function(y, p) {
+  p <- clip_prob(p)
+  y01 <- as.integer(y == "christian")
+  mean((y01 - p)^2, na.rm = TRUE)
+}
+
+auc_vec <- function(y, p) {
+  y <- droplevels(factor(y, levels = c("non_christian", "christian")))
+  if (length(unique(na.omit(y))) < 2) return(NA_real_)
+
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = clip_prob(p),
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+ap_vec <- function(y, p) {
+  y01 <- as.integer(y == "christian")
+  p <- clip_prob(p)
+  keep <- is.finite(p) & !is.na(y01)
+
+  y01 <- y01[keep]
+  p <- p[keep]
+
+  n_pos <- sum(y01 == 1)
+  if (n_pos == 0) return(NA_real_)
+
+  ord <- order(p, decreasing = TRUE)
+  y01 <- y01[ord]
+
+  precision <- cumsum(y01 == 1) / seq_along(y01)
+  sum(precision[y01 == 1]) / n_pos
+}
+
+ece_vec <- function(y, p, bins = 10L) {
+  tibble(
+    y01 = as.integer(y == "christian"),
+    p = clip_prob(p)
+  ) %>%
+    filter(is.finite(p), !is.na(y01)) %>%
+    mutate(bin = ntile(p, bins)) %>%
+    group_by(bin) %>%
+    summarise(
+      n_bin = dplyr::n(),
+      pred = mean(p),
+      obs = mean(y01),
+      .groups = "drop"
+    ) %>%
+    summarise(
+      ece = weighted.mean(abs(obs - pred), n_bin),
+      .groups = "drop"
+    ) %>%
+    pull(ece)
+}
+
+calib_coef <- function(y, p) {
+  y01 <- as.integer(y == "christian")
+  z <- qlogis(clip_prob(p))
+
+  keep <- is.finite(z) & !is.na(y01)
+  y01 <- y01[keep]
+  z <- z[keep]
+
+  if (length(unique(y01)) < 2 || length(unique(z)) < 2) {
+    return(c(intercept = NA_real_, slope = NA_real_))
+  }
+
+  fit <- tryCatch(
+    suppressWarnings(glm(y01 ~ z, family = binomial())),
+    error = function(e) NULL
+  )
+
+  if (is.null(fit)) return(c(intercept = NA_real_, slope = NA_real_))
+
+  cf <- coef(fit)
+  c(intercept = unname(cf[1]), slope = unname(cf[2]))
+}
+
+weighted_mean_safe <- function(x, w) {
+  x <- as.numeric(x)
+  w <- as.numeric(w)
+
+  keep <- is.finite(x) & is.finite(w) & w > 0
+  if (!any(keep)) return(NA_real_)
+
+  sum(x[keep] * w[keep]) / sum(w[keep])
+}
+
+row_sd_safe <- function(m) {
+  apply(m, 1, function(z) {
+    z <- z[is.finite(z)]
+    if (length(z) < 2) return(NA_real_)
+    sd(z)
+  })
+}
+
+theme_loao <- function(base_size = 11) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank(),
+      axis.title = element_text(face = "bold", color = "#111827"),
+      axis.text = element_text(color = "#111827"),
+      strip.text = element_text(face = "bold", color = "#111827"),
+      strip.background = element_rect(fill = "#F3F4F6", color = NA),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      panel.spacing = unit(1.1, "lines"),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+}
+
+save_plot <- function(p, name, width = 10, height = 7) {
+  ggsave(
+    file.path(loao_plot_dir, paste0(name, ".pdf")),
+    p,
+    width = width,
+    height = height,
+    bg = "white"
+  )
+
+  ggsave(
+    file.path(loao_plot_dir, paste0(name, ".png")),
+    p,
+    width = width,
+    height = height,
+    dpi = 600,
+    bg = "white"
+  )
+
+  if (requireNamespace("svglite", quietly = TRUE)) {
+    ggsave(
+      file.path(loao_plot_dir, paste0(name, ".svg")),
+      p,
+      width = width,
+      height = height,
+      device = svglite::svglite,
+      bg = "white"
+    )
+  }
+
+  invisible(p)
+}
+
+# ============================================================
+# Load LOAO outputs
+# ============================================================
+
+oof_vis <- read_loao("oof", "oof_predictions_labeled.csv")
+fold_vis <- read_loao("outer_fold_metrics", "outer_fold_metrics.csv")
+
+model_name_map <- c(
+  naive_bayes = "Naive Bayes",
+  enet = "Elastic net",
+  svm_platt = "SVM + Platt",
+  xgboost = "XGBoost",
+  lightgbm = "LightGBM"
+)
+
+prob_map <- c(
+  "Naive Bayes" = "nb_oof",
+  "Elastic net" = "prob_enet",
+  "SVM + Platt" = "svm_oof",
+  "XGBoost" = "xgb_oof",
+  "LightGBM" = "lgb_oof"
+)
+
+prob_map <- prob_map[prob_map %in% names(oof_vis)]
+base_prob_cols <- unname(prob_map)
+
+if (length(base_prob_cols) == 0) {
+  stop("No LOAO probability columns found.")
+}
+
+prob_label_map <- setNames(names(prob_map), unname(prob_map))
+
+oof_probs <- oof_vis %>%
+  mutate(
+    manual_label = factor(manual_label, levels = c("non_christian", "christian")),
+    across(all_of(base_prob_cols), clip_prob)
+  )
+
+prob_matrix <- as.matrix(oof_probs[, base_prob_cols, drop = FALSE])
+
+oof_probs <- oof_probs %>%
+  mutate(model_sd = row_sd_safe(prob_matrix))
+
+oof_long <- oof_probs %>%
+  select(
+    row_id,
+    id,
+    author_original,
+    author_cv,
+    manual_label,
+    model_sd,
+    all_of(base_prob_cols)
+  ) %>%
+  pivot_longer(
+    cols = all_of(base_prob_cols),
+    names_to = "prob_col",
+    values_to = "prob"
+  ) %>%
+  mutate(
+    model_label = unname(prob_label_map[prob_col]),
+    model_label = factor(model_label)
+  )
+
+# ============================================================
+# Overall OOF diagnostics
+# ============================================================
+
+overall_stats <- oof_long %>%
+  group_by(model_label) %>%
+  group_modify(~{
+    y <- .x$manual_label
+    p <- clip_prob(.x$prob)
+    cc <- calib_coef(y, p)
+
+    mean_ch <- mean(p[y == "christian"], na.rm = TRUE)
+    mean_non <- mean(p[y == "non_christian"], na.rm = TRUE)
+
+    tibble(
+      n_docs = nrow(.x),
+      auc = auc_vec(y, p),
+      average_precision = ap_vec(y, p),
+      log_loss = log_loss_vec(y, p),
+      brier = brier_vec(y, p),
+      ece = ece_vec(y, p),
+      calibration_intercept = unname(cc[["intercept"]]),
+      calibration_slope = unname(cc[["slope"]]),
+      mean_prob_christian = mean_ch,
+      mean_prob_non_christian = mean_non,
+      separation = mean_ch - mean_non
+    )
+  }) %>%
+  ungroup() %>%
+  arrange(desc(auc), log_loss)
+
+readr::write_csv(
+  overall_stats,
+  file.path(loao_table_dir, "loao_overall_model_diagnostics.csv")
+)
+
+model_order <- as.character(overall_stats$model_label)
+
+model_pal <- c(
+  "Naive Bayes" = "#5B5F97",
+  "Elastic net" = "#0E7C7B",
+  "SVM + Platt" = "#D95D39",
+  "XGBoost" = "#7B2CBF",
+  "LightGBM" = "#2F9E44"
+)
+
+label_pal <- c(
+  non_christian = "#2563EB",
+  christian = "#B91C1C"
+)
+
+oof_long <- oof_long %>%
+  mutate(model_label = factor(model_label, levels = model_order))
+
+overall_long <- overall_stats %>%
+  mutate(model_label = factor(model_label, levels = model_order)) %>%
+  pivot_longer(
+    cols = c(
+      auc,
+      average_precision,
+      log_loss,
+      brier,
+      ece,
+      calibration_slope,
+      separation
+    ),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(
+    metric_label = recode(
+      metric,
+      auc = "AUC",
+      average_precision = "Average precision",
+      log_loss = "Log loss",
+      brier = "Brier score",
+      ece = "Expected calibration error",
+      calibration_slope = "Calibration slope",
+      separation = "Mean probability separation"
+    )
+  )
+
+p_overall_stats <- ggplot(
+  overall_long,
+  aes(x = model_label, y = value, fill = model_label)
+) +
+  geom_col(width = 0.68, alpha = 0.90) +
+  geom_text(
+    aes(label = number(value, accuracy = 0.001)),
+    hjust = -0.08,
+    size = 3.0,
+    color = "#111827"
+  ) +
+  facet_wrap(~metric_label, scales = "free_x", ncol = 2) +
+  coord_flip() +
+  scale_fill_manual(values = model_pal, guide = "none") +
+  labs(x = NULL, y = NULL) +
+  theme_loao()
+
+save_plot(p_overall_stats, "loao_overall_model_diagnostics", 10.5, 9)
+print(p_overall_stats)
+
+# ============================================================
+# Fold-level metric distributions
+# ============================================================
+
+fold_vis <- fold_vis %>%
+  distinct(outer_fold, held_out_author, model, .keep_all = TRUE) %>%
+  mutate(
+    model_label = unname(model_name_map[model]),
+    model_label = if_else(
+      is.na(model_label),
+      str_to_title(str_replace_all(model, "_", " ")),
+      model_label
+    ),
+    model_label = factor(model_label, levels = model_order)
+  ) %>%
+  filter(!is.na(model_label))
+
+metric_map <- c(
+  auc = "AUC",
+  log_loss = "Log loss",
+  brier = "Brier score",
+  balanced_accuracy_youden = "Balanced accuracy",
+  f1_youden = "F1",
+  mcc_youden = "MCC"
+)
+
+metric_cols <- intersect(names(metric_map), names(fold_vis))
+
+fold_long <- fold_vis %>%
+  select(outer_fold, held_out_author, model_label, n, all_of(metric_cols)) %>%
+  pivot_longer(
+    cols = all_of(metric_cols),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(
+    metric_label = factor(metric_map[metric], levels = unname(metric_map[metric_cols])),
+    value = as.numeric(value)
+  ) %>%
+  filter(is.finite(value), !is.na(model_label))
+
+fold_metric_summary <- fold_long %>%
+  group_by(model_label, metric_label) %>%
+  summarise(
+    n_folds = dplyr::n(),
+    mean = mean(value),
+    median = median(value),
+    q10 = quantile(value, 0.10),
+    q25 = quantile(value, 0.25),
+    q75 = quantile(value, 0.75),
+    q90 = quantile(value, 0.90),
+    .groups = "drop"
+  )
+
+readr::write_csv(
+  fold_metric_summary,
+  file.path(loao_table_dir, "loao_fold_metric_distribution_summary.csv")
+)
+
+p_fold_metrics <- ggplot(
+  fold_long,
+  aes(x = model_label, y = value, fill = model_label, color = model_label)
+) +
+  geom_violin(
+    width = 0.90,
+    alpha = 0.13,
+    linewidth = 0.35,
+    trim = FALSE,
+    na.rm = TRUE
+  ) +
+  geom_boxplot(
+    width = 0.18,
+    alpha = 0.68,
+    linewidth = 0.35,
+    outlier.shape = NA,
+    na.rm = TRUE
+  ) +
+  geom_point(
+    aes(size = pmax(n, 1)),
+    position = position_jitter(width = 0.10, height = 0),
+    alpha = 0.25,
+    stroke = 0,
+    na.rm = TRUE
+  ) +
+  facet_wrap(~metric_label, scales = "free_y", ncol = 3) +
+  coord_flip() +
+  scale_fill_manual(values = model_pal, guide = "none") +
+  scale_color_manual(values = model_pal, guide = "none") +
+  scale_size_area(max_size = 2.8, name = "Held-out documents") +
+  labs(x = NULL, y = NULL) +
+  theme_loao()
+
+save_plot(p_fold_metrics, "loao_fold_metric_distributions", 11, 7.5)
+print(p_fold_metrics)
+
+# ============================================================
+# OOF probability distributions by manual label
+# ============================================================
+
+# ============================================================
+# OOF probability distributions by manual label
+# ============================================================
+
+p_prob_density <- ggplot(
+  oof_long,
+  aes(x = prob, fill = manual_label, color = manual_label)
+) +
+  geom_density(
+    alpha = 0.28,
+    linewidth = 0.65,
+    adjust = 1.05,
+    na.rm = TRUE
+  ) +
+  geom_vline(
+    xintercept = 0.5,
+    linewidth = 0.35,
+    linetype = "dashed",
+    color = "grey35"
+  ) +
+  facet_wrap(~model_label, ncol = 2) +
+  scale_x_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1)
+  ) +
+  scale_fill_manual(values = label_pal, name = "Manual label") +
+  scale_color_manual(values = label_pal, name = "Manual label") +
+  labs(
+    x = "Out-of-author predicted probability of Christian label",
+    y = "Density"
+  ) +
+  theme_loao()
+
+save_plot(p_prob_density, "loao_oof_probability_distributions", 11, 8)
+print(p_prob_density)
+
+if (requireNamespace("ggridges", quietly = TRUE)) {
+  p_prob_ridges <- ggplot(
+    oof_long,
+    aes(x = prob, y = model_label, fill = manual_label, color = manual_label)
+  ) +
+    ggridges::geom_density_ridges(
+      alpha = 0.22,
+      scale = 1.15,
+      rel_min_height = 0.01,
+      linewidth = 0.45
+    ) +
+    scale_x_continuous(
+      labels = percent_format(accuracy = 1),
+      limits = c(0, 1)
+    ) +
+    scale_fill_manual(values = label_pal, name = "Manual label") +
+    scale_color_manual(values = label_pal, name = "Manual label") +
+    labs(
+      x = "Out-of-author predicted probability of Christian label",
+      y = NULL
+    ) +
+    theme_loao()
+
+  save_plot(p_prob_ridges, "loao_oof_probability_ridges", 10.5, 5.8)
+  print(p_prob_ridges)
+}
+
+# ============================================================
+# Calibration curves
+# ============================================================
+
+calib_bins <- oof_long %>%
+  group_by(model_label) %>%
+  mutate(bin = ntile(prob, 10)) %>%
+  group_by(model_label, bin) %>%
+  summarise(
+    n_bin = dplyr::n(),
+    mean_pred = mean(prob, na.rm = TRUE),
+    obs = mean(manual_label == "christian", na.rm = TRUE),
+    se = sqrt(obs * (1 - obs) / n_bin),
+    ymin = pmax(0, obs - 1.96 * se),
+    ymax = pmin(1, obs + 1.96 * se),
+    .groups = "drop"
+  )
+
+p_calibration <- ggplot(
+  calib_bins,
+  aes(x = mean_pred, y = obs, color = model_label)
+) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linewidth = 0.45,
+    linetype = "dashed",
+    color = "grey45"
+  ) +
+  geom_errorbar(
+    aes(ymin = ymin, ymax = ymax),
+    width = 0.012,
+    alpha = 0.65,
+    linewidth = 0.45
+  ) +
+  geom_point(aes(size = n_bin), alpha = 0.85) +
+  facet_wrap(~model_label, ncol = 2) +
+  coord_equal(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+  scale_x_continuous(labels = percent_format(accuracy = 1)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_color_manual(values = model_pal, guide = "none") +
+  scale_size_area(max_size = 4.2, name = "Documents per bin") +
+  labs(
+    x = "Mean predicted probability",
+    y = "Observed Christian share"
+  ) +
+  theme_loao()
+
+save_plot(p_calibration, "loao_calibration_curves", 9.5, 8.5)
+print(p_calibration)
+
+# ============================================================
+# ROC curves
+# ============================================================
+
+roc_df <- oof_long %>%
+  group_by(model_label) %>%
+  group_modify(~{
+    r <- tryCatch(
+      pROC::roc(
+        response = .x$manual_label,
+        predictor = clip_prob(.x$prob),
+        levels = c("non_christian", "christian"),
+        direction = "<",
+        quiet = TRUE
+      ),
+      error = function(e) NULL
+    )
+
+    if (is.null(r)) return(tibble())
+
+    tibble(
+      fpr = 1 - as.numeric(r$specificities),
+      tpr = as.numeric(r$sensitivities)
+    )
+  }) %>%
+  ungroup()
+
+roc_labels <- overall_stats %>%
+  transmute(
+    model_label = factor(model_label, levels = model_order),
+    x = 0.62,
+    y = 0.12,
+    lab = paste0("AUC = ", number(auc, accuracy = 0.001))
+  )
+
+p_roc <- ggplot(roc_df, aes(x = fpr, y = tpr, color = model_label)) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linewidth = 0.45,
+    linetype = "dashed",
+    color = "grey55"
+  ) +
+  geom_path(linewidth = 0.85, alpha = 0.95, na.rm = TRUE) +
+  geom_text(
+    data = roc_labels,
+    aes(x = x, y = y, label = lab),
+    inherit.aes = FALSE,
+    size = 3.2,
+    color = "#111827"
+  ) +
+  facet_wrap(~model_label, ncol = 2) +
+  coord_equal(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+  scale_color_manual(values = model_pal, guide = "none") +
+  labs(
+    x = "False positive rate",
+    y = "True positive rate"
+  ) +
+  theme_loao()
+
+save_plot(p_roc, "loao_oof_roc_curves", 9.5, 8.5)
+print(p_roc)
+
+# ============================================================
+# Precision-recall curves
+# ============================================================
+
+pr_df <- oof_long %>%
+  group_by(model_label) %>%
+  group_modify(~{
+    y01 <- as.integer(.x$manual_label == "christian")
+    p <- clip_prob(.x$prob)
+
+    keep <- is.finite(p) & !is.na(y01)
+    y01 <- y01[keep]
+    p <- p[keep]
+
+    if (sum(y01 == 1) == 0 || sum(y01 == 0) == 0) return(tibble())
+
+    ord <- order(p, decreasing = TRUE)
+    y01 <- y01[ord]
+    p <- p[ord]
+
+    tp <- cumsum(y01 == 1)
+    fp <- cumsum(y01 == 0)
+
+    tibble(
+      recall = tp / sum(y01 == 1),
+      precision = tp / pmax(tp + fp, 1)
+    )
+  }) %>%
+  ungroup()
+
+pr_labels <- overall_stats %>%
+  transmute(
+    model_label = factor(model_label, levels = model_order),
+    x = 0.52,
+    y = 0.12,
+    lab = paste0("AP = ", number(average_precision, accuracy = 0.001))
+  )
+
+p_pr <- ggplot(pr_df, aes(x = recall, y = precision, color = model_label)) +
+  geom_path(linewidth = 0.85, alpha = 0.95, na.rm = TRUE) +
+  geom_text(
+    data = pr_labels,
+    aes(x = x, y = y, label = lab),
+    inherit.aes = FALSE,
+    size = 3.2,
+    color = "#111827"
+  ) +
+  facet_wrap(~model_label, ncol = 2) +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+  scale_x_continuous(labels = percent_format(accuracy = 1)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_color_manual(values = model_pal, guide = "none") +
+  labs(
+    x = "Recall",
+    y = "Precision"
+  ) +
+  theme_loao()
+
+save_plot(p_pr, "loao_oof_precision_recall_curves", 9.5, 8.5)
+print(p_pr)
+
+# ============================================================
+# Held-out author difficulty
+# ============================================================
+
+author_model <- oof_long %>%
+  group_by(author_original, author_cv, model_label) %>%
+  summarise(
+    n_author_docs = dplyr::n(),
+    n_christian = sum(manual_label == "christian", na.rm = TRUE),
+    prop_christian = n_christian / n_author_docs,
+    log_loss = log_loss_vec(manual_label, prob),
+    brier = brier_vec(manual_label, prob),
+    mean_abs_error = mean(
+      abs(as.integer(manual_label == "christian") - prob),
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+author_summary <- author_model %>%
+  group_by(author_original, author_cv) %>%
+  summarise(
+    n_docs = max(n_author_docs, na.rm = TRUE),
+    prop_christian = weighted_mean_safe(prop_christian, n_author_docs),
+    mean_log_loss = weighted_mean_safe(log_loss, n_author_docs),
+    min_log_loss = min(log_loss, na.rm = TRUE),
+    max_log_loss = max(log_loss, na.rm = TRUE),
+    mean_brier = weighted_mean_safe(brier, n_author_docs),
+    mean_abs_error = weighted_mean_safe(mean_abs_error, n_author_docs),
+    model_log_loss_range = max_log_loss - min_log_loss,
+    .groups = "drop"
+  ) %>%
+  filter(is.finite(mean_log_loss)) %>%
+  arrange(desc(mean_log_loss))
+
+readr::write_csv(
+  author_model,
+  file.path(loao_table_dir, "loao_author_by_model_diagnostics.csv")
+)
+
+readr::write_csv(
+  author_summary,
+  file.path(loao_table_dir, "loao_author_difficulty_summary.csv")
+)
+
+top_author_n <- min(35L, nrow(author_summary))
+```
+
+```{r}
+# ============================================================
+# Held-out author difficulty plot, cleaner version
+# ============================================================
+
+MIN_AUTHOR_DOCS <- 2L
+TOP_AUTHOR_N <- 30L
+
+author_summary_plot <- author_summary %>%
+  filter(n_docs >= MIN_AUTHOR_DOCS) %>%
+  arrange(desc(mean_log_loss)) %>%
+  slice_head(n = min(TOP_AUTHOR_N, nrow(.))) %>%
+  mutate(
+    author_label_raw = if_else(
+      is.na(author_original) | author_original == "",
+      author_cv,
+      author_original
+    )
+  ) %>%
+  group_by(author_label_raw) %>%
+  mutate(
+    author_label = if_else(
+      dplyr::n() > 1,
+      paste0(author_label_raw, " [", author_cv, "]"),
+      author_label_raw
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    author_label = forcats::fct_reorder(
+      stringr::str_trunc(author_label, 48),
+      mean_log_loss
+    )
+  )
+
+p_author_difficulty <- ggplot(
+  author_summary_plot,
+  aes(x = author_label, y = mean_log_loss)
+) +
+  geom_linerange(
+    aes(ymin = min_log_loss, ymax = max_log_loss),
+    linewidth = 0.8,
+    alpha = 0.30,
+    color = "#111827"
+  ) +
+  geom_point(
+    aes(size = n_docs, color = prop_christian),
+    alpha = 0.92
+  ) +
+  coord_flip() +
+  scale_size_area(
+    max_size = 5.5,
+    name = "Documents"
+  ) +
+  scale_color_gradient(
+    low = "#2563EB",
+    high = "#B91C1C",
+    labels = scales::percent_format(accuracy = 1),
+    name = "Christian share"
+  ) +
+  labs(
+    x = NULL,
+    y = "Mean held-out log loss across models"
+  ) +
+  theme_loao() +
+  theme(
+    legend.box = "horizontal",
+    legend.position = "bottom",
+    axis.text.y = element_text(size = 9)
+  )
+
+save_plot(
+  p_author_difficulty,
+  "loao_hardest_held_out_authors_clean",
+  10,
+  8.5
+)
+
+print(p_author_difficulty)
+```
+
+
+```{r}
+# ============================================================
+# LOAO author-pattern diagnostics with corpus dates restored
+# ============================================================
+
+library(tidyverse)
+library(scales)
+library(forcats)
+library(stringr)
+
+if (!exists("output_dir")) {
+  output_dir <- file.path(results_path, "model_outputs_loao_author_cv")
+}
+
+loao_plot_dir <- file.path(output_dir, "plots_loao_author_cv")
+loao_table_dir <- file.path(output_dir, "tables_loao_author_cv")
+dir.create(loao_plot_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(loao_table_dir, recursive = TRUE, showWarnings = FALSE)
+
+clip_prob <- function(p, eps = 1e-15) {
+  pmin(pmax(as.numeric(p), eps), 1 - eps)
+}
+
+log_loss_vec <- function(y, p) {
+  p <- clip_prob(p)
+  y01 <- as.integer(y == "christian")
+  -mean(y01 * log(p) + (1 - y01) * log(1 - p), na.rm = TRUE)
+}
+
+brier_vec <- function(y, p) {
+  p <- clip_prob(p)
+  y01 <- as.integer(y == "christian")
+  mean((y01 - p)^2, na.rm = TRUE)
+}
+
+weighted_mean_safe <- function(x, w) {
+  x <- as.numeric(x)
+  w <- as.numeric(w)
+  keep <- is.finite(x) & is.finite(w) & w > 0
+  if (!any(keep)) return(NA_real_)
+  sum(x[keep] * w[keep]) / sum(w[keep])
+}
+
+save_plot <- function(p, name, width = 10, height = 7) {
+  ggsave(file.path(loao_plot_dir, paste0(name, ".pdf")), p, width = width, height = height, bg = "white")
+  ggsave(file.path(loao_plot_dir, paste0(name, ".png")), p, width = width, height = height, dpi = 600, bg = "white")
+  if (requireNamespace("svglite", quietly = TRUE)) {
+    ggsave(file.path(loao_plot_dir, paste0(name, ".svg")), p, width = width, height = height, device = svglite::svglite, bg = "white")
+  }
+  invisible(p)
+}
+
+theme_loao <- function(base_size = 11) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank(),
+      axis.title = element_text(face = "bold", color = "#111827"),
+      axis.text = element_text(color = "#111827"),
+      strip.text = element_text(face = "bold", color = "#111827"),
+      strip.background = element_rect(fill = "#F3F4F6", color = NA),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      panel.spacing = unit(1.1, "lines"),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+}
+
+parse_year <- function(x) {
+  x0 <- as.character(x)
+  x0 <- str_trim(x0)
+  x0[x0 == ""] <- NA_character_
+
+  has_bc <- str_detect(str_to_lower(x0), "\\b(bc|bce)\\b")
+  has_ad <- str_detect(str_to_lower(x0), "\\b(ad|ce)\\b")
+
+  num <- str_extract(x0, "-?\\d+(\\.\\d+)?")
+  out <- suppressWarnings(as.numeric(num))
+
+  out <- ifelse(has_bc & !str_detect(num, "^-"), -abs(out), out)
+  out <- ifelse(has_ad, abs(out), out)
+  out
+}
+
+detect_exact_or_regex <- function(dat, exact = character(), regex = NULL) {
+  nms <- names(dat)
+  low <- tolower(nms)
+
+  exact_low <- tolower(exact)
+  hit <- nms[match(exact_low, low, nomatch = 0)]
+  hit <- hit[hit != ""]
+  if (length(hit) > 0) return(hit[1])
+
+  if (!is.null(regex)) {
+    rx_hit <- nms[str_detect(low, regex)]
+    if (length(rx_hit) > 0) return(rx_hit[1])
+  }
+
+  NA_character_
+}
+
+detect_all_dateish_cols <- function(dat) {
+  nms <- names(dat)
+  low <- tolower(nms)
+  nms[str_detect(low, "date|year|centur|chron|period|time|sdate|edate|start|end|termin")]
+}
+
+make_author_cv_id_local <- function(x) {
+  x <- str_trim(as.character(x))
+  x[x == "" | is.na(x)] <- NA_character_
+  y <- stringi::stri_trans_general(x, "Any-Latin; Latin-ASCII")
+  y <- tolower(y)
+  y <- gsub("[^a-z0-9]+", "_", y)
+  y <- gsub("^_+|_+$", "", y)
+  y
+}
+
+detect_author_column_local <- function(dat) {
+  preferred <- c(
+    "author", "author_clean", "author_name", "author_short",
+    "source_author", "creator", "source_creator",
+    "author_normalized", "canonical_author"
+  )
+  hit <- preferred[preferred %in% names(dat)]
+  if (length(hit) > 0) return(hit[1])
+
+  rx <- names(dat)[str_detect(names(dat), regex("author|creator", ignore_case = TRUE))]
+  if (length(rx) > 0) return(rx[1])
+
+  NA_character_
+}
+
+make_doc_date_fields <- function(meta) {
+  start_col <- detect_exact_or_regex(
+    meta,
+    exact = c(
+      "sdate", "start_date", "date_start", "date_min", "min_date",
+      "start_year", "year_start", "min_year", "terminus_post_quem",
+      "not_before", "earliest_date", "earliest_year", "from"
+    ),
+    regex = "^(sdate|start_?date|date_?start|date_?min|min_?date|start_?year|year_?start|min_?year|not_?before|earliest_?(date|year)|terminus_?post|from)$"
+  )
+
+  end_col <- detect_exact_or_regex(
+    meta,
+    exact = c(
+      "edate", "end_date", "date_end", "date_max", "max_date",
+      "end_year", "year_end", "max_year", "terminus_ante_quem",
+      "not_after", "latest_date", "latest_year", "to"
+    ),
+    regex = "^(edate|end_?date|date_?end|date_?max|max_?date|end_?year|year_?end|max_?year|not_?after|latest_?(date|year)|terminus_?ante|to)$"
+  )
+
+  mid_col <- detect_exact_or_regex(
+    meta,
+    exact = c(
+      "date", "year", "mid_date", "mean_date", "median_date",
+      "date_mid", "mid_year", "mean_year", "median_year",
+      "sdate_mid", "date_mean"
+    ),
+    regex = "^(date|year|mid_?date|mean_?date|median_?date|date_?mid|mid_?year|mean_?year|median_?year|date_?mean)$"
+  )
+
+  out <- meta
+
+  if (!is.na(start_col) && !is.na(end_col)) {
+    s <- parse_year(out[[start_col]])
+    e <- parse_year(out[[end_col]])
+    out$doc_date_start <- s
+    out$doc_date_end <- e
+    out$doc_date_mid <- rowMeans(cbind(s, e), na.rm = TRUE)
+    out$doc_date_source <- paste(start_col, end_col, sep = " + ")
+  } else if (!is.na(mid_col)) {
+    m <- parse_year(out[[mid_col]])
+    out$doc_date_start <- m
+    out$doc_date_end <- m
+    out$doc_date_mid <- m
+    out$doc_date_source <- mid_col
+  } else {
+    out$doc_date_start <- NA_real_
+    out$doc_date_end <- NA_real_
+    out$doc_date_mid <- NA_real_
+    out$doc_date_source <- NA_character_
+  }
+
+  out$doc_date_mid[is.nan(out$doc_date_mid)] <- NA_real_
+
+  attr(out, "start_col") <- start_col
+  attr(out, "end_col") <- end_col
+  attr(out, "mid_col") <- mid_col
+  attr(out, "dateish_cols") <- detect_all_dateish_cols(meta)
+
+  out
+}
+
+read_loao <- function(object_name, file_name) {
+  path <- file.path(output_dir, file_name)
+  if (file.exists(path)) return(readr::read_csv(path, show_col_types = FALSE))
+
+  if (exists(object_name, inherits = TRUE)) {
+    x <- get(object_name, inherits = TRUE)
+    if (is.list(x) && !is.data.frame(x)) return(dplyr::bind_rows(x))
+    return(tibble::as_tibble(x))
+  }
+
+  stop("Could not find ", file_name, " or object `", object_name, "`.")
+}
+
+# ============================================================
+# Load LOAO outputs and corpus metadata
+# ============================================================
+
+oof_vis <- read_loao("oof", "oof_predictions_labeled.csv")
+
+corpus_meta <- if (exists("df", inherits = TRUE)) {
+  get("df", inherits = TRUE) %>% tibble::as_tibble()
+} else {
+  readr::read_csv(file.path(data_path, "corpus_600ad.csv"), show_col_types = FALSE) %>%
+    mutate(id = as.character(id)) %>%
+    filter(!("text" %in% names(.)) | (!is.na(text) & text != "")) %>%
+    mutate(row_id = row_number())
+}
+
+corpus_meta <- corpus_meta %>%
+  mutate(id = as.character(id)) %>%
+  { if (!"row_id" %in% names(.)) mutate(., row_id = row_number()) else . }
+
+author_col <- detect_author_column_local(corpus_meta)
+
+if (!is.na(author_col)) {
+  corpus_meta <- corpus_meta %>%
+    mutate(
+      corpus_author_original = str_trim(as.character(.data[[author_col]])),
+      corpus_author_cv = make_author_cv_id_local(.data[[author_col]])
+    )
+} else {
+  corpus_meta <- corpus_meta %>%
+    mutate(
+      corpus_author_original = NA_character_,
+      corpus_author_cv = NA_character_
+    )
+}
+
+corpus_meta <- make_doc_date_fields(corpus_meta)
+
+start_col <- attr(corpus_meta, "start_col")
+end_col <- attr(corpus_meta, "end_col")
+mid_col <- attr(corpus_meta, "mid_col")
+dateish_cols <- attr(corpus_meta, "dateish_cols")
+
+message("Detected date start column: ", ifelse(is.na(start_col), "none", start_col))
+message("Detected date end column: ", ifelse(is.na(end_col), "none", end_col))
+message("Detected single/mid date column: ", ifelse(is.na(mid_col), "none", mid_col))
+message("All date-like columns found in corpus: ", paste(dateish_cols, collapse = ", "))
+
+type_col <- detect_exact_or_regex(
+  corpus_meta,
+  exact = c("type", "genre", "text_type", "form", "prose_poetry", "meter", "mode"),
+  regex = "^(type|genre|text_?type|form|prose_?poetry|meter|mode)$"
+)
+
+message("Detected type/genre column: ", ifelse(is.na(type_col), "none", type_col))
+
+corpus_join <- corpus_meta %>%
+  select(
+    row_id,
+    id,
+    corpus_author_original,
+    corpus_author_cv,
+    doc_date_start,
+    doc_date_end,
+    doc_date_mid,
+    doc_date_source,
+    any_of(type_col)
+  ) %>%
+  distinct(row_id, .keep_all = TRUE)
+
+join_key <- if ("row_id" %in% names(oof_vis) && "row_id" %in% names(corpus_join)) {
+  "row_id"
+} else {
+  "id"
+}
+
+oof_with_meta <- oof_vis %>%
+  mutate(id = as.character(id)) %>%
+  left_join(corpus_join, by = join_key, suffix = c("", "_corpus")) %>%
+  mutate(
+    author_original = coalesce(
+      na_if(as.character(author_original), ""),
+      na_if(corpus_author_original, ""),
+      as.character(author_cv),
+      corpus_author_cv
+    ),
+    author_cv = coalesce(
+      na_if(as.character(author_cv), ""),
+      corpus_author_cv,
+      make_author_cv_id_local(author_original)
+    )
+  )
+
+if (all(is.na(oof_with_meta$doc_date_mid))) {
+  warning(
+    paste0(
+      "No usable dates were recovered. Check these corpus columns manually: ",
+      paste(dateish_cols, collapse = ", ")
+    )
+  )
+}
+
+# ============================================================
+# Rebuild long OOF probability data, no ensemble
+# ============================================================
+
+prob_map <- c(
+  "Naive Bayes" = "nb_oof",
+  "Elastic net" = "prob_enet",
+  "SVM + Platt" = "svm_oof",
+  "XGBoost" = "xgb_oof",
+  "LightGBM" = "lgb_oof"
+)
+
+prob_map <- prob_map[prob_map %in% names(oof_with_meta)]
+base_prob_cols <- unname(prob_map)
+
+if (length(base_prob_cols) == 0) {
+  stop("No LOAO probability columns found.")
+}
+
+prob_label_map <- setNames(names(prob_map), unname(prob_map))
+
+oof_long_meta <- oof_with_meta %>%
+  mutate(
+    manual_label = factor(manual_label, levels = c("non_christian", "christian")),
+    across(all_of(base_prob_cols), clip_prob),
+    dominant_type_doc = if (!is.na(type_col)) as.character(.data[[type_col]]) else NA_character_
+  ) %>%
+  select(
+    row_id,
+    id,
+    author_original,
+    author_cv,
+    manual_label,
+    doc_date_start,
+    doc_date_end,
+    doc_date_mid,
+    doc_date_source,
+    dominant_type_doc,
+    all_of(base_prob_cols)
+  ) %>%
+  pivot_longer(
+    cols = all_of(base_prob_cols),
+    names_to = "prob_col",
+    values_to = "prob"
+  ) %>%
+  mutate(
+    model_label = unname(prob_label_map[prob_col]),
+    model_label = factor(model_label, levels = names(prob_map))
+  )
+
+# ============================================================
+# Author-level LOAO difficulty
+# ============================================================
+
+author_model <- oof_long_meta %>%
+  group_by(author_original, author_cv, model_label) %>%
+  summarise(
+    n_author_docs = dplyr::n_distinct(id),
+    n_christian = sum(manual_label == "christian", na.rm = TRUE),
+    observed_christian_share = mean(manual_label == "christian", na.rm = TRUE),
+    log_loss = log_loss_vec(manual_label, prob),
+    brier = brier_vec(manual_label, prob),
+    mean_abs_error = mean(abs(as.integer(manual_label == "christian") - prob), na.rm = TRUE),
+    .groups = "drop"
+  )
+
+author_summary <- author_model %>%
+  group_by(author_original, author_cv) %>%
+  summarise(
+    n_docs = max(n_author_docs, na.rm = TRUE),
+    observed_christian_share = weighted_mean_safe(observed_christian_share, n_author_docs),
+    mean_log_loss = weighted_mean_safe(log_loss, n_author_docs),
+    min_log_loss = min(log_loss, na.rm = TRUE),
+    max_log_loss = max(log_loss, na.rm = TRUE),
+    mean_brier = weighted_mean_safe(brier, n_author_docs),
+    mean_abs_error = weighted_mean_safe(mean_abs_error, n_author_docs),
+    model_log_loss_range = max_log_loss - min_log_loss,
+    .groups = "drop"
+  ) %>%
+  filter(is.finite(mean_log_loss)) %>%
+  arrange(desc(mean_log_loss))
+
+# ============================================================
+# Author metadata with restored dates
+# ============================================================
+
+author_meta <- oof_with_meta %>%
+  group_by(author_original, author_cv) %>%
+  summarise(
+    n_docs_meta = dplyr::n_distinct(id),
+    observed_christian_share_meta = mean(manual_label == "christian", na.rm = TRUE),
+    mean_date = mean(doc_date_mid, na.rm = TRUE),
+    min_date = suppressWarnings(min(doc_date_start, na.rm = TRUE)),
+    max_date = suppressWarnings(max(doc_date_end, na.rm = TRUE)),
+    date_source = paste(unique(na.omit(doc_date_source)), collapse = "; "),
+    dominant_type = {
+      z <- dominant_type_doc <- if (!is.na(type_col)) as.character(.data[[type_col]]) else NA_character_
+      z <- z[!is.na(z) & z != ""]
+      if (length(z) == 0) NA_character_ else names(sort(table(z), decreasing = TRUE))[1]
+    },
+    .groups = "drop"
+  ) %>%
+  mutate(
+    mean_date = ifelse(is.nan(mean_date), NA_real_, mean_date),
+    min_date = ifelse(is.infinite(min_date), NA_real_, min_date),
+    max_date = ifelse(is.infinite(max_date), NA_real_, max_date)
+  )
+
+author_pattern_df <- author_meta %>%
+  left_join(author_summary, by = c("author_original", "author_cv")) %>%
+  mutate(
+    observed_christian_share = coalesce(observed_christian_share, observed_christian_share_meta),
+    label_entropy = case_when(
+      is.na(observed_christian_share) ~ NA_real_,
+      observed_christian_share %in% c(0, 1) ~ 0,
+      TRUE ~ -(
+        observed_christian_share * log(observed_christian_share) +
+          (1 - observed_christian_share) * log(1 - observed_christian_share)
+      )
+    ),
+    date_bin = case_when(
+      is.na(mean_date) ~ "unknown",
+      mean_date < -80 ~ "Archaic / Republican",
+      mean_date < 14 ~ "Classical",
+      mean_date < 180 ~ "Early Imperial",
+      mean_date < 300 ~ "Later Imperial",
+      mean_date < 500 ~ "Late antique 300–499",
+      TRUE ~ "Late antique 500+"
+    ),
+    christian_share_bin = case_when(
+      is.na(observed_christian_share) ~ "unknown",
+      observed_christian_share == 0 ~ "0% Christian",
+      observed_christian_share == 1 ~ "100% Christian",
+      observed_christian_share < 0.5 ~ "mixed, mostly non-Christian",
+      observed_christian_share > 0.5 ~ "mixed, mostly Christian",
+      TRUE ~ "balanced"
+    )
+  ) %>%
+  filter(is.finite(mean_log_loss)) %>%
+  arrange(desc(mean_log_loss))
+
+readr::write_csv(
+  author_model,
+  file.path(loao_table_dir, "loao_author_by_model_diagnostics_with_dates.csv")
+)
+
+readr::write_csv(
+  author_summary,
+  file.path(loao_table_dir, "loao_author_difficulty_summary_with_dates.csv")
+)
+
+readr::write_csv(
+  author_pattern_df,
+  file.path(loao_table_dir, "loao_author_pattern_diagnostics_with_dates.csv")
+)
+
+# ============================================================
+# Pattern summaries
+# ============================================================
+
+pattern_summary_date <- author_pattern_df %>%
+  group_by(date_bin) %>%
+  summarise(
+    n_authors = dplyr::n(),
+    median_loss = median(mean_log_loss, na.rm = TRUE),
+    mean_loss = mean(mean_log_loss, na.rm = TRUE),
+    q75_loss = quantile(mean_log_loss, 0.75, na.rm = TRUE),
+    mean_christian_share = mean(observed_christian_share, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(median_loss))
+
+pattern_summary_type <- author_pattern_df %>%
+  filter(!is.na(dominant_type), dominant_type != "") %>%
+  group_by(dominant_type) %>%
+  summarise(
+    n_authors = dplyr::n(),
+    median_loss = median(mean_log_loss, na.rm = TRUE),
+    mean_loss = mean(mean_log_loss, na.rm = TRUE),
+    q75_loss = quantile(mean_log_loss, 0.75, na.rm = TRUE),
+    mean_christian_share = mean(observed_christian_share, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(median_loss))
+
+pattern_summary_label <- author_pattern_df %>%
+  group_by(christian_share_bin) %>%
+  summarise(
+    n_authors = dplyr::n(),
+    median_loss = median(mean_log_loss, na.rm = TRUE),
+    mean_loss = mean(mean_log_loss, na.rm = TRUE),
+    q75_loss = quantile(mean_log_loss, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(median_loss))
+
+readr::write_csv(pattern_summary_date, file.path(loao_table_dir, "loao_pattern_by_date_bin.csv"))
+readr::write_csv(pattern_summary_type, file.path(loao_table_dir, "loao_pattern_by_type.csv"))
+readr::write_csv(pattern_summary_label, file.path(loao_table_dir, "loao_pattern_by_label_mix.csv"))
+
+print(pattern_summary_date)
+print(pattern_summary_type)
+print(pattern_summary_label)
+
+author_pattern_df %>%
+  select(
+    author_original,
+    n_docs,
+    observed_christian_share,
+    mean_date,
+    min_date,
+    max_date,
+    date_bin,
+    dominant_type,
+    mean_log_loss,
+    model_log_loss_range
+  ) %>%
+  slice_head(n = 50) %>%
+  knitr::kable(digits = 3)
+
+# ============================================================
+# Plot: author difficulty by restored date bin
+# ============================================================
+
+p_author_pattern <- author_pattern_df %>%
+  filter(is.finite(mean_log_loss), !is.na(date_bin)) %>%
+  mutate(
+    date_bin = forcats::fct_reorder(
+      date_bin,
+      mean_log_loss,
+      .fun = median,
+      na.rm = TRUE
+    )
+  ) %>%
+  ggplot(aes(x = date_bin, y = mean_log_loss)) +
+  geom_boxplot(
+    width = 0.55,
+    outlier.shape = NA,
+    linewidth = 0.35,
+    alpha = 0.35
+  ) +
+  geom_point(
+    aes(size = n_docs, color = observed_christian_share),
+    position = position_jitter(width = 0.12, height = 0),
+    alpha = 0.80
+  ) +
+  coord_flip() +
+  scale_size_area(max_size = 5.2, name = "Documents") +
+  scale_color_gradient(
+    low = "#2563EB",
+    high = "#B91C1C",
+    labels = scales::percent_format(accuracy = 1),
+    name = "Christian share"
+  ) +
+  labs(
+    x = NULL,
+    y = "Mean held-out log loss across models"
+  ) +
+  theme_loao()
+
+save_plot(
+  p_author_pattern,
+  "loao_author_difficulty_by_date_bin_fixed",
+  9.5,
+  6.5
+)
+
+print(p_author_pattern)
+
+# ============================================================
+# Plot: hardest authors with dates shown in labels
+# ============================================================
+
+MIN_AUTHOR_DOCS <- 2L
+TOP_AUTHOR_N <- 30L
+
+hard_author_plot_df <- author_pattern_df %>%
+  filter(n_docs >= MIN_AUTHOR_DOCS) %>%
+  arrange(desc(mean_log_loss)) %>%
+  slice_head(n = min(TOP_AUTHOR_N, nrow(.))) %>%
+  mutate(
+    author_label_raw = if_else(
+      is.na(author_original) | author_original == "",
+      author_cv,
+      author_original
+    ),
+    date_label = if_else(
+      is.na(mean_date),
+      "unknown",
+      as.character(round(mean_date))
+    ),
+    author_label = paste0(author_label_raw, " (", date_label, ")")
+  ) %>%
+  group_by(author_label) %>%
+  mutate(
+    author_label = if_else(
+      dplyr::n() > 1,
+      paste0(author_label, " [", author_cv, "]"),
+      author_label
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    author_label = forcats::fct_reorder(
+      stringr::str_trunc(author_label, 56),
+      mean_log_loss
+    )
+  )
+
+p_hard_authors_dates <- ggplot(
+  hard_author_plot_df,
+  aes(x = author_label, y = mean_log_loss)
+) +
+  geom_linerange(
+    aes(ymin = min_log_loss, ymax = max_log_loss),
+    linewidth = 0.8,
+    alpha = 0.30,
+    color = "#111827"
+  ) +
+  geom_point(
+    aes(size = n_docs, color = observed_christian_share),
+    alpha = 0.92
+  ) +
+  coord_flip() +
+  scale_size_area(max_size = 5.5, name = "Documents") +
+  scale_color_gradient(
+    low = "#2563EB",
+    high = "#B91C1C",
+    labels = scales::percent_format(accuracy = 1),
+    name = "Christian share"
+  ) +
+  labs(
+    x = NULL,
+    y = "Mean held-out log loss across models"
+  ) +
+  theme_loao() +
+  theme(
+    legend.box = "horizontal",
+    legend.position = "bottom",
+    axis.text.y = element_text(size = 9)
+  )
+
+save_plot(
+  p_hard_authors_dates,
+  "loao_hardest_held_out_authors_with_dates",
+  10.5,
+  8.5
+)
+
+print(p_hard_authors_dates)
+```

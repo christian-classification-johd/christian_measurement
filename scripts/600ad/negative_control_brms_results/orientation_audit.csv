@@ -1,0 +1,6 @@
+score,auc_raw,mean_christian,mean_non_christian,flipped,score_aligned
+score_nb_logit,0.9631716967243283,29.682524073710454,-21.914270205029656,FALSE,score_nb_logit_aligned
+score_ridge_logit,0.9780318365844681,0.8157624086654561,-3.0908639923794055,FALSE,score_ridge_logit_aligned
+score_svm_logit,0.9813213102686786,4.117329694766727,-4.390694624228158,FALSE,score_svm_logit_aligned
+score_xgb_logit,0.9642988590357011,2.6145280307356225,-3.8618564485745352,FALSE,score_xgb_logit_aligned
+score_lgb_logit,0.9677953625322047,2.2335264773192556,-3.8109493219667128,FALSE,score_lgb_logit_aligned

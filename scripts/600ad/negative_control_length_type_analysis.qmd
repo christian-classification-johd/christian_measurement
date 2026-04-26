@@ -1,0 +1,1683 @@
+---
+title: "Temporal confounding analysis"
+format: html
+editor: visual
+---
+
+## Temporal confounding analysis
+
+```{r}
+# ============================================================
+# System / backend setup
+# ============================================================
+Sys.setenv(OMP_NUM_THREADS = "1")
+Sys.setenv(OPENBLAS_NUM_THREADS = "1")
+Sys.setenv(MKL_NUM_THREADS = "1")
+Sys.setenv(STAN_NUM_THREADS = "1")
+Sys.setenv(MC_CORES = "1")
+Sys.setenv(MAKEFLAGS = "-j1")
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(brms)
+  library(loo)
+  library(scales)
+  library(patchwork)
+  library(tidytext)
+})
+
+options(mc.cores = 1)
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+# ============================================================
+# Helpers
+# ============================================================
+
+ensure_dir <- function(path) {
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  path
+}
+
+safe_string <- function(x, missing = "Unknown") {
+  x <- as.character(x)
+  x[is.na(x) | !nzchar(trimws(x))] <- missing
+  x
+}
+
+clean_label <- function(x) {
+  x <- x %>%
+    as.character() %>%
+    stringr::str_trim() %>%
+    stringr::str_to_lower()
+
+  dplyr::case_when(
+    x %in% c("christian", "christianity", "c") ~ "christian",
+    x %in% c("non_christian", "non-christian", "non christian", "pagan", "nc") ~ "non_christian",
+    TRUE ~ NA_character_
+  )
+}
+
+safe_standardize <- function(x) {
+  x <- as.numeric(x)
+  s <- stats::sd(x, na.rm = TRUE)
+  m <- mean(x, na.rm = TRUE)
+  if (!is.finite(s) || s <= 0) return(rep(0, length(x)))
+  (x - m) / s
+}
+
+fast_auc <- function(score, y01) {
+  ok <- is.finite(score) & !is.na(y01)
+  score <- score[ok]
+  y01 <- y01[ok]
+  if (length(score) == 0) return(NA_real_)
+  n1 <- sum(y01 == 1)
+  n0 <- sum(y01 == 0)
+  if (n1 == 0 || n0 == 0) return(NA_real_)
+  r <- rank(score, ties.method = "average")
+  (sum(r[y01 == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+
+has_col <- function(df, nm) {
+  nm %in% names(df)
+}
+
+get_col <- function(df, nm, default = NA) {
+  if (has_col(df, nm)) df[[nm]] else rep(default, nrow(df))
+}
+
+coalesce_existing <- function(df, cols, default = NA) {
+  vals <- lapply(cols, function(nm) get_col(df, nm, default = NA))
+  out <- vals[[1]]
+  if (length(vals) > 1) {
+    for (i in 2:length(vals)) out <- dplyr::coalesce(out, vals[[i]])
+  }
+  if (length(default) == 1) out[is.na(out)] <- default
+  out
+}
+
+dedupe_by_id <- function(df, name) {
+  if (!("id" %in% names(df))) return(df)
+  dup_n <- sum(duplicated(df$id))
+  if (dup_n > 0) {
+    warning(name, " has ", dup_n, " duplicated ids. Keeping the first row per id.")
+    df <- df %>% distinct(id, .keep_all = TRUE)
+  }
+  df
+}
+
+list_candidate_files <- function(search_dirs) {
+  search_dirs <- unique(normalizePath(search_dirs[file.exists(search_dirs)], winslash = "/", mustWork = FALSE))
+  out <- purrr::map(search_dirs, function(d) {
+    tibble(
+      dir = d,
+      path = list.files(d, full.names = TRUE, recursive = FALSE, all.files = FALSE)
+    )
+  }) %>% bind_rows()
+  unique(out$path)
+}
+
+find_file_by_pattern <- function(patterns, search_dirs, must_exist = TRUE) {
+  files <- list_candidate_files(search_dirs)
+  bases <- basename(files)
+
+  for (pat in patterns) {
+    hit <- files[stringr::str_detect(bases, pat)]
+    if (length(hit) > 0) return(hit[[1]])
+  }
+
+  if (isTRUE(must_exist)) {
+    stop(
+      "Could not find a matching file. Searched directories:\n",
+      paste0("  - ", unique(search_dirs), collapse = "\n"),
+      call. = FALSE
+    )
+  }
+  NULL
+}
+
+read_csv_if_exists <- function(path) {
+  if (is.null(path) || !file.exists(path)) return(NULL)
+  readr::read_csv(path, show_col_types = FALSE)
+}
+
+bind_or_empty <- function(x, template) {
+  if (length(x) == 0) return(template)
+  dplyr::bind_rows(x)
+}
+
+make_formula <- function(rhs_terms = character(), random_term = NULL) {
+  rhs_terms <- rhs_terms[!is.na(rhs_terms) & nzchar(rhs_terms)]
+  if (!is.null(random_term) && nzchar(random_term)) rhs_terms <- c(rhs_terms, random_term)
+  rhs <- if (length(rhs_terms) == 0) "1" else paste(rhs_terms, collapse = " + ")
+  brms::bf(stats::as.formula(paste("y ~", rhs)))
+}
+
+formula_has_score <- function(model_name) {
+  stringr::str_detect(model_name, "score")
+}
+
+choose_backend <- function() {
+  if (!requireNamespace("cmdstanr", quietly = TRUE)) {
+    options(brms.backend = "rstan")
+    return("rstan")
+  }
+
+  ok <- tryCatch({
+    p <- cmdstanr::cmdstan_path()
+    if (!nzchar(p)) return(FALSE)
+    tmp <- tempfile(fileext = ".stan")
+    writeLines(
+      c(
+        "data {int<lower=0> N; vector[N] y;}",
+        "parameters {real mu; real<lower=0> sigma;}",
+        "model {y ~ normal(mu, sigma);}"
+      ),
+      tmp
+    )
+    mod <- cmdstanr::cmdstan_model(tmp, quiet = TRUE)
+    inherits(mod, "CmdStanModel")
+  }, error = function(e) FALSE)
+
+  if (isTRUE(ok)) {
+    options(brms.backend = "cmdstanr")
+    "cmdstanr"
+  } else {
+    options(brms.backend = "rstan")
+    "rstan"
+  }
+}
+
+run_loo_safely <- function(fit) {
+  out <- tryCatch(
+    suppressWarnings(brms::loo(fit, cores = 1)),
+    error = function(e) e
+  )
+
+  if (inherits(out, "error")) {
+    return(list(
+      loo = NULL,
+      pareto_k = NULL,
+      loo_error = conditionMessage(out)
+    ))
+  }
+
+  pk <- tryCatch(loo::pareto_k_values(out), error = function(e) NULL)
+
+  list(
+    loo = out,
+    pareto_k = pk,
+    loo_error = NA_character_
+  )
+}
+
+model_has_score_coef <- function(fit) {
+  fe <- tryCatch(brms::fixef(fit), error = function(e) NULL)
+  !is.null(fe) && "score_std" %in% rownames(fe)
+}
+
+empty_comparison_tbl <- tibble(
+  outcome = character(),
+  score = character(),
+  model = character(),
+  elpd_loo = double(),
+  elpd_loo_se = double(),
+  p_loo = double(),
+  looic = double(),
+  delta_looic = double(),
+  delta_elpd = double(),
+  rank = integer()
+)
+
+empty_effect_tbl <- tibble(
+  outcome = character(),
+  score = character(),
+  model = character(),
+  estimate = double(),
+  est_error = double(),
+  l95 = double(),
+  u95 = double(),
+  prob_positive = double(),
+  score_coef_present = logical()
+)
+
+empty_pareto_tbl <- tibble(
+  outcome = character(),
+  score = character(),
+  model = character(),
+  n_k_gt_0_7 = integer(),
+  n_k_gt_1_0 = integer(),
+  max_k = double(),
+  worst_row = integer(),
+  worst_id = character()
+)
+
+empty_summary_tbl <- tibble(
+  outcome = character(),
+  score = character(),
+  n = integer(),
+  n_models_attempted = integer(),
+  n_models_fit_ok = integer(),
+  n_models_loo_ok = integer(),
+  score_sd_raw = double(),
+  outcome_sd_raw = double(),
+  backend = character(),
+  adapt_delta = double(),
+  max_treedepth = double()
+)
+
+empty_matching_tbl <- tibble(
+  outcome = character(),
+  n_after_outcome_date_filter = integer(),
+  n_common_ids_all_scores = integer()
+)
+
+empty_status_tbl <- tibble(
+  outcome = character(),
+  score = character(),
+  model = character(),
+  n = integer(),
+  fit_ok = logical(),
+  loo_ok = logical(),
+  score_model = logical(),
+  score_coef_present = logical(),
+  error_message = character(),
+  loo_error_message = character()
+)
+
+# ============================================================
+# Paths
+# ============================================================
+
+search_dirs <- c(
+  getwd(),
+  ".",
+  "..",
+  "../..",
+  "../../results/predictions/non_transformer_lemmatized/600ad",
+  "../../data/processed_texts/600ad",
+  "../../data/processed_text/600ad",
+  "/mnt/data"
+)
+
+pred_path <- find_file_by_pattern(
+  patterns = c(
+    "^corpus_600ad_model_outputs_oof(?:\\([0-9]+\\))?\\.csv$",
+    "model_outputs_oof.*\\.csv$"
+  ),
+  search_dirs = search_dirs,
+  must_exist = TRUE
+)
+
+corpus_path <- find_file_by_pattern(
+  patterns = c(
+    "^corpus_600ad(?:\\([0-9]+\\))?\\.csv$"
+  ),
+  search_dirs = search_dirs,
+  must_exist = FALSE
+)
+
+results_dir <- ensure_dir("../../results/predictions/non_transformer_lemmatized/600ad/negative_control")
+tables_dir <- ensure_dir(file.path(results_dir, "tables"))
+report_dir <- ensure_dir(file.path(results_dir, "report"))
+fig_dir <- ensure_dir(file.path(report_dir, "figures"))
+tab_dir <- ensure_dir(file.path(report_dir, "tables"))
+
+backend_used <- choose_backend()
+message("Using brms backend: ", backend_used)
+message("[path] predictions = ", pred_path)
+message("[path] corpus      = ", corpus_path %||% "<not found>")
+
+# ============================================================
+# Read data
+# ============================================================
+
+pred <- readr::read_csv(pred_path, show_col_types = FALSE)
+if (!has_col(pred, "id")) pred$id <- seq_len(nrow(pred))
+pred <- dedupe_by_id(pred, "Prediction file")
+
+corpus <- read_csv_if_exists(corpus_path)
+if (!is.null(corpus)) {
+  if (!has_col(corpus, "id")) {
+    if (nrow(corpus) == nrow(pred)) {
+      corpus$id <- pred$id
+    } else {
+      stop("Corpus file has no 'id' column and does not match prediction file row count.", call. = FALSE)
+    }
+  }
+  corpus <- dedupe_by_id(corpus, "Corpus file")
+
+  keep <- intersect(
+    c("id", "creator", "type", "date_range_start", "date_range_end", "n_words", "n_chars", "manual_label", "prediction_source"),
+    names(corpus)
+  )
+
+  corpus_small <- corpus %>%
+    dplyr::select(all_of(keep)) %>%
+    dplyr::rename_with(~ paste0(.x, "_corpus"), -id)
+
+  dat <- pred %>% dplyr::left_join(corpus_small, by = "id")
+} else {
+  dat <- pred
+}
+
+data_integrity_tbl <- tibble(
+  pred_rows = nrow(pred),
+  corpus_rows = if (!is.null(corpus)) nrow(corpus) else NA_integer_,
+  merged_rows = nrow(dat),
+  pred_unique_ids = dplyr::n_distinct(pred$id),
+  merged_unique_ids = dplyr::n_distinct(dat$id)
+)
+
+readr::write_csv(data_integrity_tbl, file.path(tables_dir, "data_integrity.csv"))
+
+# ============================================================
+# Metadata harmonization
+# ============================================================
+
+dat <- dat %>%
+  mutate(
+    id = as.character(id),
+    creator = safe_string(coalesce_existing(., c("creator_corpus", "creator"), default = "Unknown")),
+    type = safe_string(coalesce_existing(., c("type_corpus", "type"), default = "Unknown")),
+    prediction_source = safe_string(coalesce_existing(., c("prediction_source_corpus", "prediction_source"), default = "Unknown")),
+    date_range_start_use = suppressWarnings(as.numeric(coalesce_existing(., c("date_range_start_corpus", "date_range_start"), default = NA_real_))),
+    date_range_end_use = suppressWarnings(as.numeric(coalesce_existing(., c("date_range_end_corpus", "date_range_end"), default = NA_real_))),
+    date_mid = dplyr::if_else(
+      is.finite(date_range_start_use) & is.finite(date_range_end_use),
+      (date_range_start_use + date_range_end_use) / 2,
+      NA_real_
+    ),
+    n_words = suppressWarnings(as.numeric(coalesce_existing(., c("n_words_corpus", "n_words"), default = NA_real_))),
+    n_chars = suppressWarnings(as.numeric(coalesce_existing(., c("n_chars_corpus", "n_chars"), default = NA_real_))),
+    manual_label_clean = clean_label(coalesce_existing(., c("manual_label_corpus", "manual_label"), default = NA_character_))
+  )
+
+score_cols <- names(dat)[stringr::str_detect(names(dat), "^score_.*_logit$")]
+score_cols <- setdiff(score_cols, stringr::str_subset(names(dat), "_aligned$"))
+
+if (length(score_cols) == 0) stop("No score columns were found.", call. = FALSE)
+
+# ============================================================
+# Align scores to the labeled subset
+# ============================================================
+
+y01 <- ifelse(dat$manual_label_clean == "christian", 1,
+              ifelse(dat$manual_label_clean == "non_christian", 0, NA))
+
+orientation_audit <- purrr::map_dfr(score_cols, function(sc) {
+  s <- suppressWarnings(as.numeric(dat[[sc]]))
+  auc_raw <- fast_auc(s, y01)
+  flip <- is.finite(auc_raw) && auc_raw < 0.5
+  dat[[paste0(sc, "_aligned")]] <<- if (flip) -s else s
+  tibble(
+    score = sc,
+    auc_raw = auc_raw,
+    flipped = flip,
+    auc_aligned = fast_auc(dat[[paste0(sc, "_aligned")]], y01)
+  )
+})
+
+score_cols_aligned <- paste0(score_cols, "_aligned")
+readr::write_csv(orientation_audit, file.path(tables_dir, "orientation_audit.csv"))
+
+# ============================================================
+# Analysis data construction
+# ============================================================
+
+make_outcome_base_df <- function(dat, outcome, score_cols_aligned) {
+  dat %>%
+    transmute(
+      id = as.character(id),
+      outcome_raw = suppressWarnings(as.numeric(.data[[outcome]])),
+      date_mid = suppressWarnings(as.numeric(date_mid)),
+      type = safe_string(type, "Unknown"),
+      creator = safe_string(creator, "Unknown"),
+      prediction_source = safe_string(prediction_source, "Unknown"),
+      across(all_of(score_cols_aligned), ~ suppressWarnings(as.numeric(.x)))
+    ) %>%
+    distinct(id, .keep_all = TRUE) %>%
+    filter(
+      is.finite(outcome_raw),
+      outcome_raw >= 0,
+      is.finite(date_mid)
+    )
+}
+
+make_analysis_df <- function(base_df, score_col) {
+  base_df %>%
+    transmute(
+      id = as.character(id),
+      score = suppressWarnings(as.numeric(.data[[score_col]])),
+      outcome_raw = suppressWarnings(as.numeric(outcome_raw)),
+      date_mid = suppressWarnings(as.numeric(date_mid)),
+      type = droplevels(factor(safe_string(type, "Unknown"))),
+      creator = droplevels(factor(safe_string(creator, "Unknown"))),
+      prediction_source = droplevels(factor(safe_string(prediction_source, "Unknown")))
+    ) %>%
+    filter(is.finite(score), is.finite(outcome_raw), is.finite(date_mid)) %>%
+    mutate(
+      y = safe_standardize(log1p(outcome_raw)),
+      score_std = safe_standardize(score),
+      date_mid_z = safe_standardize(date_mid)
+    )
+}
+
+build_forms <- function(df) {
+  include_type <- dplyr::n_distinct(df$type) >= 2
+  include_source <- dplyr::n_distinct(df$prediction_source) >= 2
+  creator_tab <- table(df$creator)
+  include_creator <- dplyr::n_distinct(df$creator) >= 3 && any(creator_tab >= 2)
+  n_unique_dates <- dplyr::n_distinct(df$date_mid_z)
+  include_linear_date <- n_unique_dates >= 2
+  include_smooth_date <- n_unique_dates >= 5
+  k_smooth <- max(3L, min(6L, n_unique_dates - 1L))
+
+  type_term <- if (include_type) "type" else NULL
+  source_term <- if (include_source) "prediction_source" else NULL
+  creator_term <- if (include_creator) "(1 | creator)" else NULL
+  linear_date_term <- if (include_linear_date) "date_mid_z" else NULL
+  smooth_date_term <- if (include_smooth_date) paste0("s(date_mid_z, k = ", k_smooth, ")") else NULL
+
+  forms <- list(
+    intercept = make_formula(),
+    score = make_formula("score_std"),
+    date_type = make_formula(c(linear_date_term, type_term)),
+    date_type_score = make_formula(c(linear_date_term, type_term, "score_std"))
+  )
+
+  if (!is.null(smooth_date_term)) {
+    forms$sdate_type <- make_formula(c(smooth_date_term, type_term))
+    forms$sdate_type_score <- make_formula(c(smooth_date_term, type_term, "score_std"))
+  }
+
+  if (!is.null(source_term)) {
+    forms$source_date_type <- make_formula(c(source_term, linear_date_term, type_term))
+    forms$source_date_type_score <- make_formula(c(source_term, linear_date_term, type_term, "score_std"))
+    if (!is.null(smooth_date_term)) {
+      forms$source_sdate_type <- make_formula(c(source_term, smooth_date_term, type_term))
+      forms$source_sdate_type_score <- make_formula(c(source_term, smooth_date_term, type_term, "score_std"))
+    }
+  }
+
+  if (!is.null(creator_term)) {
+    forms$creator_date_type <- make_formula(c(linear_date_term, type_term), creator_term)
+    forms$creator_date_type_score <- make_formula(c(linear_date_term, type_term, "score_std"), creator_term)
+    if (!is.null(smooth_date_term)) {
+      forms$creator_sdate_type <- make_formula(c(smooth_date_term, type_term), creator_term)
+      forms$creator_sdate_type_score <- make_formula(c(smooth_date_term, type_term, "score_std"), creator_term)
+    }
+  }
+
+  if (!is.null(source_term) && !is.null(creator_term)) {
+    forms$source_creator_date_type <- make_formula(c(source_term, linear_date_term, type_term), creator_term)
+    forms$source_creator_date_type_score <- make_formula(c(source_term, linear_date_term, type_term, "score_std"), creator_term)
+    if (!is.null(smooth_date_term)) {
+      forms$source_creator_sdate_type <- make_formula(c(source_term, smooth_date_term, type_term), creator_term)
+      forms$source_creator_sdate_type_score <- make_formula(c(source_term, smooth_date_term, type_term, "score_std"), creator_term)
+    }
+  }
+
+  forms
+}
+
+# ============================================================
+# Priors
+# ============================================================
+
+get_priors_for_formula <- function(formula_obj) {
+  f <- formula_obj$formula
+  tl <- attr(stats::terms(f), "term.labels")
+
+  pri <- c(
+    brms::prior(student_t(3, 0, 2.5), class = "Intercept"),
+    brms::prior(exponential(1), class = "sigma")
+  )
+
+  fixed_terms <- tl[!grepl("^s\\(", tl) & !grepl("\\|", tl)]
+  if (length(fixed_terms) > 0) {
+    pri <- c(pri, brms::prior(normal(0, 1), class = "b"))
+  }
+
+  if (any(grepl("^s\\(", tl))) {
+    pri <- c(pri, brms::prior(exponential(1), class = "sds"))
+  }
+
+  if (any(grepl("\\|", tl))) {
+    pri <- c(pri, brms::prior(exponential(1), class = "sd"))
+  }
+
+  pri
+}
+
+# ============================================================
+# Fitting
+# ============================================================
+
+fit_one_model <- function(formula_obj, data) {
+  pri <- get_priors_for_formula(formula_obj)
+
+  common_args <- list(
+    formula = formula_obj,
+    data = data,
+    family = gaussian(),
+    prior = pri,
+    chains = 2,
+    cores = 1,
+    iter = 2000,
+    warmup = 1000,
+    seed = 1234,
+    refresh = 0,
+    save_pars = brms::save_pars(all = TRUE),
+    control = list(adapt_delta = 0.99, max_treedepth = 12)
+  )
+
+  fit <- tryCatch({
+    if (identical(getOption("brms.backend"), "cmdstanr")) {
+      do.call(
+        brms::brm,
+        c(common_args, list(
+          backend = "cmdstanr",
+          threads = brms::threading(1),
+          silent = 2
+        ))
+      )
+    } else {
+      do.call(
+        brms::brm,
+        c(common_args, list(
+          backend = "rstan",
+          init = 0
+        ))
+      )
+    }
+  }, error = function(e) e)
+
+  if (inherits(fit, "error")) {
+    return(list(
+      fit = NULL,
+      loo = NULL,
+      pareto_k = NULL,
+      error_message = conditionMessage(fit),
+      loo_error_message = NA_character_
+    ))
+  }
+
+  loo_res <- run_loo_safely(fit)
+
+  list(
+    fit = fit,
+    loo = loo_res$loo,
+    pareto_k = loo_res$pareto_k,
+    error_message = NA_character_,
+    loo_error_message = loo_res$loo_error
+  )
+}
+
+extract_score_effect <- function(fit, outcome, score_col, model_name) {
+  fe <- tryCatch(brms::fixef(fit), error = function(e) NULL)
+  has_coef <- !is.null(fe) && "score_std" %in% rownames(fe)
+
+  if (!has_coef) {
+    return(tibble(
+      outcome = outcome,
+      score = score_col,
+      model = model_name,
+      estimate = NA_real_,
+      est_error = NA_real_,
+      l95 = NA_real_,
+      u95 = NA_real_,
+      prob_positive = NA_real_,
+      score_coef_present = FALSE
+    ))
+  }
+
+  draws <- tryCatch(as.data.frame(brms::as_draws_df(fit)), error = function(e) NULL)
+  score_draw_col <- if (!is.null(draws)) grep("^b_score_std$", names(draws), value = TRUE) else character(0)
+  prob_positive <- if (length(score_draw_col) == 1) mean(draws[[score_draw_col]] > 0) else NA_real_
+
+  tibble(
+    outcome = outcome,
+    score = score_col,
+    model = model_name,
+    estimate = unname(fe["score_std", "Estimate"]),
+    est_error = unname(fe["score_std", "Est.Error"]),
+    l95 = unname(fe["score_std", "Q2.5"]),
+    u95 = unname(fe["score_std", "Q97.5"]),
+    prob_positive = prob_positive,
+    score_coef_present = TRUE
+  )
+}
+
+compare_models <- function(loos, outcome, score_col) {
+  nm <- names(loos)
+  if (length(loos) == 0) return(empty_comparison_tbl)
+
+  get_est <- function(l, metric, col) {
+    if (is.null(l) || !inherits(l, "loo") || !metric %in% rownames(l$estimates)) return(NA_real_)
+    l$estimates[metric, col]
+  }
+
+  out <- tibble(
+    outcome = outcome,
+    score = score_col,
+    model = nm,
+    elpd_loo = purrr::map_dbl(loos, ~ get_est(.x, "elpd_loo", "Estimate")),
+    elpd_loo_se = purrr::map_dbl(loos, ~ get_est(.x, "elpd_loo", "SE")),
+    p_loo = purrr::map_dbl(loos, ~ get_est(.x, "p_loo", "Estimate")),
+    looic = purrr::map_dbl(loos, ~ get_est(.x, "looic", "Estimate"))
+  ) %>%
+    filter(!(is.na(looic) & is.na(elpd_loo)))
+
+  if (nrow(out) == 0) return(empty_comparison_tbl)
+
+  out %>%
+    arrange(looic) %>%
+    mutate(
+      delta_looic = if (all(is.na(looic))) NA_real_ else looic - min(looic, na.rm = TRUE),
+      delta_elpd = if (all(is.na(elpd_loo))) NA_real_ else elpd_loo - max(elpd_loo, na.rm = TRUE),
+      rank = row_number()
+    )
+}
+
+summarize_pareto_k <- function(pareto_k_list, outcome, score_col, ids = NULL) {
+  if (length(pareto_k_list) == 0) return(empty_pareto_tbl)
+
+  purrr::imap_dfr(pareto_k_list, function(pk, model_name) {
+    if (is.null(pk) || length(pk) == 0 || all(is.na(pk))) {
+      return(tibble(
+        outcome = outcome,
+        score = score_col,
+        model = model_name,
+        n_k_gt_0_7 = NA_integer_,
+        n_k_gt_1_0 = NA_integer_,
+        max_k = NA_real_,
+        worst_row = NA_integer_,
+        worst_id = NA_character_
+      ))
+    }
+
+    worst_row <- which.max(pk)
+
+    tibble(
+      outcome = outcome,
+      score = score_col,
+      model = model_name,
+      n_k_gt_0_7 = sum(pk > 0.7, na.rm = TRUE),
+      n_k_gt_1_0 = sum(pk > 1.0, na.rm = TRUE),
+      max_k = max(pk, na.rm = TRUE),
+      worst_row = worst_row,
+      worst_id = if (!is.null(ids) && length(ids) >= worst_row) as.character(ids[[worst_row]]) else NA_character_
+    )
+  })
+}
+
+# ============================================================
+# Run model grid
+# ============================================================
+
+all_comparisons <- list()
+all_effects <- list()
+all_pareto <- list()
+summary_rows <- list()
+matching_rows <- list()
+status_rows <- list()
+idx <- 1L
+midx <- 1L
+sidx <- 1L
+
+for (outcome in c("n_words", "n_chars")) {
+  if (!(outcome %in% names(dat))) next
+
+  outcome_base <- make_outcome_base_df(dat, outcome, score_cols_aligned)
+
+  common_ids <- outcome_base %>%
+    filter(if_all(all_of(score_cols_aligned), is.finite)) %>%
+    pull(id)
+
+  base_common <- outcome_base %>%
+    filter(id %in% common_ids) %>%
+    distinct(id, .keep_all = TRUE)
+
+  matching_rows[[midx]] <- tibble(
+    outcome = outcome,
+    n_after_outcome_date_filter = nrow(outcome_base),
+    n_common_ids_all_scores = length(common_ids)
+  )
+  midx <- midx + 1L
+
+  if (nrow(base_common) < 40) {
+    warning("Skipping outcome ", outcome, " because fewer than 40 ids remain after strict matching across all score columns.")
+    next
+  }
+
+  for (score_col in score_cols_aligned) {
+    if (!(score_col %in% names(base_common))) next
+
+    message("[fit] outcome=", outcome, " | score=", score_col)
+
+    df <- make_analysis_df(base_common, score_col)
+
+    score_sd_raw <- sd(df$score, na.rm = TRUE)
+    outcome_sd_raw <- sd(df$outcome_raw, na.rm = TRUE)
+
+    if (!is.finite(score_sd_raw) || score_sd_raw <= 0) {
+      warning("Skipping ", outcome, " x ", score_col, " because score is constant after strict id matching.")
+      next
+    }
+
+    if (!is.finite(outcome_sd_raw) || outcome_sd_raw <= 0) {
+      warning("Skipping ", outcome, " x ", score_col, " because outcome is constant after strict id matching.")
+      next
+    }
+
+    forms <- build_forms(df)
+    fit_res <- purrr::map(forms, ~ fit_one_model(.x, df))
+
+    for (nm in names(fit_res)) {
+      res <- fit_res[[nm]]
+      score_model <- formula_has_score(nm)
+      status_rows[[sidx]] <- tibble(
+        outcome = outcome,
+        score = score_col,
+        model = nm,
+        n = nrow(df),
+        fit_ok = !is.null(res$fit),
+        loo_ok = !is.null(res$loo) && inherits(res$loo, "loo"),
+        score_model = score_model,
+        score_coef_present = if (!is.null(res$fit) && score_model) model_has_score_coef(res$fit) else NA,
+        error_message = res$error_message %||% NA_character_,
+        loo_error_message = res$loo_error_message %||% NA_character_
+      )
+      sidx <- sidx + 1L
+    }
+
+    fit_res_fit_ok <- fit_res[purrr::map_lgl(fit_res, ~ !is.null(.x$fit))]
+    fit_res_loo_ok <- fit_res_fit_ok[purrr::map_lgl(fit_res_fit_ok, ~ !is.null(.x$loo) && inherits(.x$loo, "loo"))]
+
+    cmp_tbl <- compare_models(
+      purrr::map(fit_res_loo_ok, "loo"),
+      outcome = outcome,
+      score_col = score_col
+    )
+
+    score_fit_names <- names(fit_res_fit_ok)[formula_has_score(names(fit_res_fit_ok))]
+    eff_tbl <- if (length(score_fit_names) > 0) {
+      purrr::imap_dfr(
+        fit_res_fit_ok[score_fit_names],
+        function(ft, nm) extract_score_effect(ft$fit, outcome, score_col, nm)
+      )
+    } else {
+      empty_effect_tbl
+    }
+
+    pk_tbl <- summarize_pareto_k(
+      purrr::map(fit_res_fit_ok, "pareto_k"),
+      outcome = outcome,
+      score_col = score_col,
+      ids = df$id
+    )
+
+    all_comparisons[[paste(outcome, score_col, sep = "__")]] <- cmp_tbl
+    all_effects[[paste(outcome, score_col, sep = "__")]] <- eff_tbl
+    all_pareto[[paste(outcome, score_col, sep = "__")]] <- pk_tbl
+
+    summary_rows[[idx]] <- tibble(
+      outcome = outcome,
+      score = score_col,
+      n = nrow(df),
+      n_models_attempted = length(forms),
+      n_models_fit_ok = length(fit_res_fit_ok),
+      n_models_loo_ok = length(fit_res_loo_ok),
+      score_sd_raw = score_sd_raw,
+      outcome_sd_raw = outcome_sd_raw,
+      backend = backend_used,
+      adapt_delta = 0.99,
+      max_treedepth = 12
+    )
+    idx <- idx + 1L
+  }
+}
+
+comparison_tbl <- bind_or_empty(all_comparisons, empty_comparison_tbl)
+effects_tbl <- bind_or_empty(all_effects, empty_effect_tbl)
+pareto_tbl <- bind_or_empty(all_pareto, empty_pareto_tbl)
+summary_tbl <- bind_or_empty(summary_rows, empty_summary_tbl)
+matching_tbl <- bind_or_empty(matching_rows, empty_matching_tbl)
+model_status_tbl <- bind_or_empty(status_rows, empty_status_tbl)
+
+readr::write_csv(comparison_tbl, file.path(tables_dir, "model_comparisons.csv"))
+readr::write_csv(effects_tbl, file.path(tables_dir, "score_effects.csv"))
+readr::write_csv(pareto_tbl, file.path(tables_dir, "pareto_k_summary.csv"))
+readr::write_csv(summary_tbl, file.path(tables_dir, "run_summary.csv"))
+readr::write_csv(matching_tbl, file.path(tables_dir, "matching_summary.csv"))
+readr::write_csv(model_status_tbl, file.path(tables_dir, "model_status.csv"))
+
+summary_tbl
+matching_tbl
+model_status_tbl %>%
+  count(outcome, score, fit_ok, loo_ok, score_model, score_coef_present, name = "n_models")
+```
+
+### Plottong the model results. 
+```{r}
+# ============================================================
+# Minimal, Publishable Performance & Effect Dashboard (Words)
+# ============================================================
+
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(tidytext)
+library(stringr)
+library(ggdist)        
+library(distributional) 
+
+# --- Publishable Theme ---
+theme_report <- function(base_size = 14) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      text = element_text(color = "#222222"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_blank(), 
+      panel.grid.major.x = element_line(color = "#E0E0E0", linewidth = 0.6),
+      panel.background = element_rect(fill = "transparent", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      axis.title = element_text(face = "bold"),
+      axis.text.y = element_text(face = "bold", color = "#111111", size = base_size),
+      axis.text.x = element_text(color = "#333333", size = base_size - 2),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      plot.title = element_text(face = "bold", size = base_size + 4, hjust = 0.5)
+    )
+}
+
+# --- Labeling Functions ---
+pretty_score <- function(x) {
+  x |>
+    stringr::str_remove("_aligned$") |>
+    dplyr::recode(
+      score_nb_logit = "NB",
+      score_ridge_logit = "Elastic Net Logistic", # Updated label
+      score_svm_logit = "SVM",
+      score_xgb_logit = "XGB",
+      score_lgb_logit = "LGBM",
+      score_bert_logit = "Latin BERT",
+      .default = x
+    )
+}
+
+pretty_model <- function(x) {
+  dplyr::recode(
+    x,
+    intercept = "Intercept",
+    score = "Score only",
+    date_type = "Date+Type",
+    date_type_score = "Date+Type+Score",
+    sdate_type = "SDate+Type",
+    sdate_type_score = "SDate+Type+Score",
+    source_date_type = "Src+Date+Type",
+    source_date_type_score = "Src+Date+Type+Score",
+    source_sdate_type = "Src+SDate+Type",
+    source_sdate_type_score = "Src+SDate+Type+Score",
+    creator_date_type = "Date+Type+Creator RE",
+    creator_date_type_score = "Date+Type+Score+Creator RE",
+    creator_sdate_type = "SDate+Type+Creator RE",
+    creator_sdate_type_score = "SDate+Type+Score+Creator RE",
+    source_creator_date_type = "Src+Date+Type+Creator RE",
+    source_creator_date_type_score = "Src+Date+Type+Score+Creator RE",
+    source_creator_sdate_type = "Src+SDate+Type+Creator RE",
+    source_creator_sdate_type_score = "Src+SDate+Type+Score+Creator RE",
+    .default = x
+  )
+}
+
+# Updated levels vector
+score_levels <- c("LGBM", "NB", "Elastic Net Logistic", "SVM", "XGB", "Latin BERT") 
+
+predictor_slug <- function(x) stringr::str_replace_all(stringr::str_to_lower(x), "[^a-z0-9]+", "_")
+
+# --- Data Preparation ---
+cmp2 <- comparison_tbl %>%
+  filter(outcome %in% c("n_words", "Words")) %>%
+  mutate(
+    score_label = factor(pretty_score(score), levels = score_levels),
+    model_label = pretty_model(model),
+    model_plot_label = stringr::str_wrap(model_label, width = 35)
+  ) %>%
+  group_by(score_label) %>%
+  mutate(delta_looic = if (all(is.na(looic))) NA_real_ else looic - min(looic, na.rm = TRUE)) %>%
+  ungroup()
+
+eff2 <- effects_tbl %>%
+  filter(outcome %in% c("n_words", "Words")) %>%
+  mutate(
+    score_label = factor(pretty_score(score), levels = score_levels),
+    model_label = pretty_model(model),
+    model_plot_label = stringr::str_wrap(model_label, width = 35),
+    includes_score = stringr::str_detect(model, "score"),
+    effect_strength = case_when(
+      prob_positive >= 0.975 ~ "Strong +",
+      prob_positive >= 0.90 ~ "Moderate +",
+      prob_positive <= 0.025 ~ "Strong -",
+      prob_positive <= 0.10 ~ "Moderate -",
+      TRUE ~ "Weak"
+    )
+  ) %>%
+  filter(includes_score, !is.na(estimate), score_coef_present)
+
+plot_top_keys <- cmp2 %>%
+  filter(!is.na(looic)) %>%
+  group_by(score_label) %>%
+  slice_min(looic, n = 8, with_ties = FALSE) %>%
+  ungroup() %>%
+  distinct(score_label, model, model_plot_label)
+
+cmp_plot <- cmp2 %>% semi_join(plot_top_keys, by = c("score_label", "model"))
+eff_plot <- eff2 %>% semi_join(plot_top_keys, by = c("score_label", "model"))
+
+# --- Vibrant Plotting Function ---
+make_words_dashboard <- function(cmp_data, eff_data, predictor_value) {
+  cmp_df <- cmp_data %>% filter(score_label == predictor_value)
+  eff_df <- eff_data %>% filter(score_label == predictor_value)
+  
+  if (nrow(cmp_df) == 0 | nrow(eff_df) == 0) return(NULL)
+
+  df_integrated <- cmp_df %>%
+    inner_join(eff_df %>% select(model, estimate, est_error, effect_strength), by = "model") %>%
+    mutate(model_plot = reorder(model_plot_label, -delta_looic))
+
+  # Plot A: Vibrant Lollipops (Turbo Palette)
+  p_loo <- ggplot(df_integrated, aes(x = delta_looic, y = model_plot, color = delta_looic)) +
+    geom_segment(aes(x = 0, xend = delta_looic, yend = model_plot), linewidth = 2, alpha = 0.9) +
+    geom_point(size = 6) +
+    geom_vline(xintercept = 2, linetype = "dashed", linewidth = 1.2, color = "#D50000") +
+    tidytext::scale_y_reordered() +
+    scale_color_viridis_c(option = "turbo", direction = -1, guide = "none") +
+    labs(
+      title = expression("Model Fit (" * Delta * " LOOIC)"),
+      x = expression(Delta * " LOOIC (vs Best)"),
+      y = NULL
+    ) +
+    theme_report()
+
+  # Plot B: Bold Density Estimates
+  p_eff <- ggplot(df_integrated, aes(y = model_plot)) +
+    geom_vline(xintercept = 0, linetype = "solid", linewidth = 1.2, color = "#222222") +
+    ggdist::stat_dist_halfeye(
+      aes(dist = distributional::dist_normal(estimate, est_error), fill = effect_strength),
+      alpha = 0.95, point_color = "black", interval_color = "black",
+      slab_linewidth = 0.8, linewidth = 2, justification = -0.1
+    ) +
+    tidytext::scale_y_reordered() +
+    scale_fill_manual(
+      values = c("Strong +" = "#00E676", "Moderate +" = "#69F0AE", "Weak" = "#CFD8DC", "Moderate -" = "#FF9100", "Strong -" = "#FF1744"),
+      breaks = c("Strong -", "Moderate -", "Weak", "Moderate +", "Strong +")
+    ) +
+    labs(
+      title = "Adjusted Score Effect",
+      x = "Standardized Effect",
+      y = NULL,
+      fill = "Support"
+    ) +
+    theme_report() +
+    theme(axis.text.y = element_blank())
+
+  # Seamless Integration
+  dashboard <- (p_loo | p_eff) +
+    plot_annotation(
+      title = predictor_value,
+      theme = theme(plot.title = element_text(size = 24, face = "bold", hjust = 0.5))
+    ) +
+    plot_layout(widths = c(1, 1.2))
+
+  return(dashboard)
+}
+
+# --- Execution ---
+for (pred_value in score_levels) {
+  slug <- predictor_slug(pred_value)
+  integrated_dashboard <- make_words_dashboard(cmp_plot, eff_plot, pred_value)
+  
+  if (!is.null(integrated_dashboard)) {
+    ggsave(file.path(fig_dir, paste0("dashboard_words_pred_", slug, ".png")), 
+           integrated_dashboard, width = 16, height = 9, dpi = 300)
+    print(integrated_dashboard)
+  }
+}
+```
+
+## Correlations in the corpus
+
+```{r}
+# ============================================================
+# Beautiful Visualizations: Label, n_words, and text type
+# ============================================================
+# Required libraries (assuming tidyverse, scales, patchwork already loaded)
+library(ggdist)   
+library(viridis)
+
+# 1. Prepare the subset of data for visualization
+plot_dat <- dat %>%
+  filter(
+    !is.na(manual_label_clean),
+    is.finite(n_words),
+    n_words > 0,
+    !is.na(type),
+    type != "Unknown"
+  ) %>%
+  mutate(
+    # Create clear factors for plotting
+    label_factor = factor(
+      manual_label_clean, 
+      levels = c("non_christian", "christian"), 
+      labels = c("Non-Christian", "Christian")
+    ),
+    binary_christian = if_else(manual_label_clean == "christian", 1, 0),
+    # Log-transform word counts for better distribution visibility
+    log_words = log10(n_words) 
+  ) %>%
+  # Filter to text types that have enough observations to plot cleanly (e.g., n >= 10)
+  add_count(type, name = "type_count") %>%
+  filter(type_count >= 10) %>%
+  # Reorder text type by median word count for a neat staggered look
+  mutate(type = forcats::fct_reorder(type, log_words, .fun = median))
+
+# Upgraded visual theme
+theme_beautiful <- function(base_size = 14) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      plot.title = element_text(face = "bold", size = base_size + 4, color = "#1A2421"),
+      plot.subtitle = element_text(color = "#4A5553", margin = margin(b = 15)),
+      plot.caption = element_text(color = "#889290", size = base_size - 4, margin = margin(t = 15)),
+      panel.grid.major.x = element_line(color = "#E2E8E5", linewidth = 0.5),
+      panel.grid.major.y = element_line(color = "#E2E8E5", linewidth = 0.5, linetype = "dotted"),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold", size = base_size, color = "#2C3E50"),
+      legend.position = "top",
+      legend.title = element_text(face = "bold")
+    )
+}
+```
+
+```{r}
+# ------------------------------------------------------------
+# Plot A: Raincloud / Density plot of n_words by Type & Label
+# ------------------------------------------------------------
+# ------------------------------------------------------------
+# Plot A: Raincloud / Density plot of n_words by Type & Label
+# ------------------------------------------------------------
+p_density <- ggplot(plot_dat, aes(x = log_words, y = type, fill = label_factor, color = label_factor)) +
+  stat_halfeye(
+    adjust = 0.5, 
+    width = 0.6, 
+    .width = c(0.5, 0.95), 
+    justification = -0.2, 
+    point_colour = NA,
+    alpha = 0.7
+  ) +
+  geom_jitter(
+    aes(y = as.numeric(type) - 0.15),
+    height = 0.05,
+    size = 1.2,
+    alpha = 0.3,
+    shape = 21,
+    stroke = 0.2
+  ) +
+  scale_fill_manual(values = c("Non-Christian" = "#E67E22", "Christian" = "#2980B9")) +
+  scale_color_manual(values = c("Non-Christian" = "#D35400", "Christian" = "#21618C")) +
+  scale_x_continuous(
+    labels = function(x) math_format(10^.x)(x),
+    breaks = scales::breaks_pretty(n = 5)
+  ) +
+  labs(
+    title = "Word Count Distributions",
+    x = "Words",
+    y = NULL,
+    fill = "Label",
+    color = "Label"
+  ) +
+  theme_beautiful()
+
+# ------------------------------------------------------------
+# Plot B: Logistic Regression Curve (Probability ~ n_words)
+# ------------------------------------------------------------
+p_prob <- ggplot(plot_dat, aes(x = log_words, y = binary_christian, color = type)) +
+  geom_jitter(height = 0.03, alpha = 0.2, size = 1.5) +
+  geom_smooth(
+    method = "glm", 
+    method.args = list(family = "binomial"), 
+    se = FALSE, 
+    linewidth = 1.2,
+    alpha = 0.8
+  ) +
+  geom_smooth(
+    method = "glm", 
+    method.args = list(family = "binomial"), 
+    se = TRUE, 
+    color = "black", 
+    linewidth = 1.5,
+    linetype = "dashed",
+    fill = "grey50",
+    alpha = 0.2
+  ) +
+  scale_color_viridis_d(option = "turbo") +
+  scale_x_continuous(
+    labels = function(x) math_format(10^.x)(x),
+    breaks = scales::breaks_pretty(n = 5)
+  ) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Probability of 'Christian' Label",
+    x = "Words",
+    y = "Probability",
+    color = "Type"
+  ) +
+  theme_beautiful()
+
+# ------------------------------------------------------------
+# Combine using patchwork
+# ------------------------------------------------------------
+final_visualization <- (p_density / p_prob) +
+  plot_layout(heights = c(1.5, 1)) +
+  plot_annotation(
+    theme = theme(plot.background = element_rect(fill = "#FAFAFA", color = NA))
+  )
+
+print(final_visualization)
+
+
+
+# Save the plot
+save_plot_obj(final_visualization, "label_wordcount_type_correlation.png", width = 16, height = 14)
+
+```
+
+## Fitting the text-type models 
+
+```{r}
+# ============================================================
+# System / backend setup
+# ============================================================
+Sys.setenv(OMP_NUM_THREADS = "1")
+Sys.setenv(OPENBLAS_NUM_THREADS = "1")
+Sys.setenv(MKL_NUM_THREADS = "1")
+Sys.setenv(STAN_NUM_THREADS = "1")
+Sys.setenv(MC_CORES = "1")
+Sys.setenv(MAKEFLAGS = "-j1")
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(brms)
+  library(loo)
+  library(scales)
+  library(patchwork)
+  library(tidytext)
+  library(ggdist)
+  library(distributional)
+  library(viridis)
+})
+
+options(mc.cores = 1)
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+# ============================================================
+# Helpers
+# ============================================================
+ensure_dir <- function(path) { dir.create(path, recursive = TRUE, showWarnings = FALSE); path }
+safe_string <- function(x, missing = "Unknown") { x <- as.character(x); x[is.na(x) | !nzchar(trimws(x))] <- missing; x }
+safe_standardize <- function(x) { x <- as.numeric(x); s <- stats::sd(x, na.rm = TRUE); m <- mean(x, na.rm = TRUE); if (!is.finite(s) || s <= 0) return(rep(0, length(x))); (x - m) / s }
+
+make_formula <- function(rhs_terms = character(), random_term = NULL) {
+  rhs_terms <- rhs_terms[!is.na(rhs_terms) & nzchar(rhs_terms)]
+  if (!is.null(random_term) && nzchar(random_term)) rhs_terms <- c(rhs_terms, random_term)
+  rhs <- if (length(rhs_terms) == 0) "1" else paste(rhs_terms, collapse = " + ")
+  brms::bf(stats::as.formula(paste("y ~", rhs)))
+}
+
+formula_has_score <- function(model_name) { stringr::str_detect(model_name, "score") }
+
+choose_backend <- function() {
+  if (!requireNamespace("cmdstanr", quietly = TRUE)) { options(brms.backend = "rstan"); return("rstan") }
+  ok <- tryCatch({
+    p <- cmdstanr::cmdstan_path()
+    if (!nzchar(p)) return(FALSE)
+    tmp <- tempfile(fileext = ".stan")
+    writeLines(c("data {int<lower=0> N; vector[N] y;}", "parameters {real mu; real<lower=0> sigma;}", "model {y ~ normal(mu, sigma);}"), tmp)
+    inherits(cmdstanr::cmdstan_model(tmp, quiet = TRUE), "CmdStanModel")
+  }, error = function(e) FALSE)
+  
+  if (isTRUE(ok)) { options(brms.backend = "cmdstanr"); "cmdstanr" } else { options(brms.backend = "rstan"); "rstan" }
+}
+
+# ============================================================
+# Configuration & Tables
+# ============================================================
+score_levels <- c("LightGBM", "Naive Bayes", "Ridge", "SVM", "XGBoost", "Latin BERT")
+outcome_levels <- c("Text Type")
+
+pretty_outcome <- function(x) { dplyr::recode(x, type = "Text Type", .default = x) }
+pretty_score <- function(x) {
+  x |> stringr::str_remove("_aligned$") |> dplyr::recode(
+    score_nb_logit = "Naive Bayes", score_ridge_logit = "Elastic Net", score_svm_logit = "SVM",
+    score_xgb_logit = "XGBoost", score_lgb_logit = "LightGBM", score_bert_logit = "Latin BERT", .default = x
+  )
+}
+
+pretty_model <- function(x) {
+  dplyr::recode(
+    x,
+    intercept = "Intercept",
+    score = "Score only",
+    date = "Date",
+    date_score = "Date + score",
+    sdate = "Smooth date",
+    sdate_score = "Smooth date + score",
+    source_date = "Prediction source + date",
+    source_date_score = "Prediction source + date + score",
+    source_sdate = "Prediction source + smooth date",
+    source_sdate_score = "Prediction source + smooth date + score",
+    creator_date = "Date + creator RE",
+    creator_date_score = "Date + score + creator RE",
+    creator_sdate = "Smooth date + creator RE",
+    creator_sdate_score = "Smooth date + score + creator RE",
+    source_creator_date = "Prediction source + date + creator RE",
+    source_creator_date_score = "Prediction source + date + score + creator RE",
+    source_creator_sdate = "Prediction source + smooth date + creator RE",
+    source_creator_sdate_score = "Prediction source + smooth date + score + creator RE",
+    .default = x
+  )
+}
+
+# ============================================================
+# Core Functions
+# ============================================================
+make_outcome_base_df <- function(dat, score_cols_aligned) {
+  dat %>%
+    transmute(
+      id = as.character(id),
+      outcome_raw = safe_string(type, "Unknown"),
+      date_mid = suppressWarnings(as.numeric(date_mid)),
+      creator = safe_string(creator, "Unknown"),
+      prediction_source = safe_string(prediction_source, "Unknown"),
+      across(all_of(score_cols_aligned), ~ suppressWarnings(as.numeric(.x)))
+    ) %>%
+    distinct(id, .keep_all = TRUE) %>%
+    filter(outcome_raw != "Unknown", is.finite(date_mid))
+}
+
+make_analysis_df <- function(base_df, score_col) {
+  base_df %>%
+    transmute(
+      id = as.character(id),
+      score = suppressWarnings(as.numeric(.data[[score_col]])),
+      outcome_raw = droplevels(factor(outcome_raw)),
+      date_mid = suppressWarnings(as.numeric(date_mid)),
+      creator = droplevels(factor(safe_string(creator, "Unknown"))),
+      prediction_source = droplevels(factor(safe_string(prediction_source, "Unknown")))
+    ) %>%
+    filter(is.finite(score), is.finite(date_mid)) %>%
+    mutate(
+      y = outcome_raw,
+      score_std = safe_standardize(score),
+      date_mid_z = safe_standardize(date_mid)
+    )
+}
+
+build_forms <- function(df) {
+  include_source <- dplyr::n_distinct(df$prediction_source) >= 2
+  creator_tab <- table(df$creator)
+  include_creator <- dplyr::n_distinct(df$creator) >= 3 && any(creator_tab >= 2)
+  n_unique_dates <- dplyr::n_distinct(df$date_mid_z)
+  include_linear_date <- n_unique_dates >= 2
+  include_smooth_date <- n_unique_dates >= 5
+  k_smooth <- max(3L, min(6L, n_unique_dates - 1L))
+
+  source_term <- if (include_source) "prediction_source" else NULL
+  creator_term <- if (include_creator) "(1 | creator)" else NULL
+  linear_date_term <- if (include_linear_date) "date_mid_z" else NULL
+  smooth_date_term <- if (include_smooth_date) paste0("s(date_mid_z, k = ", k_smooth, ")") else NULL
+
+  forms <- list(
+    intercept = make_formula(),
+    score = make_formula("score_std"),
+    date = make_formula(linear_date_term),
+    date_score = make_formula(c(linear_date_term, "score_std"))
+  )
+
+  if (!is.null(smooth_date_term)) {
+    forms$sdate <- make_formula(smooth_date_term)
+    forms$sdate_score <- make_formula(c(smooth_date_term, "score_std"))
+  }
+
+  if (!is.null(source_term)) {
+    forms$source_date <- make_formula(c(source_term, linear_date_term))
+    forms$source_date_score <- make_formula(c(source_term, linear_date_term, "score_std"))
+    if (!is.null(smooth_date_term)) {
+      forms$source_sdate <- make_formula(c(source_term, smooth_date_term))
+      forms$source_sdate_score <- make_formula(c(source_term, smooth_date_term, "score_std"))
+    }
+  }
+
+  if (!is.null(creator_term)) {
+    forms$creator_date <- make_formula(linear_date_term, creator_term)
+    forms$creator_date_score <- make_formula(c(linear_date_term, "score_std"), creator_term)
+    if (!is.null(smooth_date_term)) {
+      forms$creator_sdate <- make_formula(smooth_date_term, creator_term)
+      forms$creator_sdate_score <- make_formula(c(smooth_date_term, "score_std"), creator_term)
+    }
+  }
+
+  if (!is.null(source_term) && !is.null(creator_term)) {
+    forms$source_creator_date <- make_formula(c(source_term, linear_date_term), creator_term)
+    forms$source_creator_date_score <- make_formula(c(source_term, linear_date_term, "score_std"), creator_term)
+    if (!is.null(smooth_date_term)) {
+      forms$source_creator_sdate <- make_formula(c(source_term, smooth_date_term), creator_term)
+      forms$source_creator_sdate_score <- make_formula(c(source_term, smooth_date_term, "score_std"), creator_term)
+    }
+  }
+  forms
+}
+
+get_priors_for_formula <- function(formula_obj) {
+  f <- formula_obj$formula
+  tl <- attr(stats::terms(f), "term.labels")
+
+  pri <- c(brms::prior(student_t(3, 0, 2.5), class = "Intercept"))
+  fixed_terms <- tl[!grepl("^s\\(", tl) & !grepl("\\|", tl)]
+  if (length(fixed_terms) > 0) pri <- c(pri, brms::prior(normal(0, 1), class = "b"))
+  if (any(grepl("^s\\(", tl))) pri <- c(pri, brms::prior(exponential(1), class = "sds"))
+  if (any(grepl("\\|", tl))) pri <- c(pri, brms::prior(exponential(1), class = "sd"))
+  pri
+}
+
+# ============================================================
+# Updated Fitting Function (No custom priors for categorical)
+# ============================================================
+
+fit_one_model <- function(formula_obj, data) {
+  # Dynamically choose family based on number of text types
+  n_cats <- dplyr::n_distinct(data$y)
+  model_family <- if (n_cats == 2) bernoulli() else categorical()
+
+  common_args <- list(
+    formula = formula_obj, 
+    data = data, 
+    family = model_family, 
+    chains = 2, 
+    cores = 1, 
+    iter = 2000, 
+    warmup = 1000, 
+    seed = 1234, 
+    refresh = 0,
+    save_pars = brms::save_pars(all = TRUE), 
+    control = list(adapt_delta = 0.99, max_treedepth = 12)
+  )
+
+  fit <- tryCatch({
+    if (identical(getOption("brms.backend"), "cmdstanr")) {
+      do.call(brms::brm, c(common_args, list(backend = "cmdstanr", threads = brms::threading(1), silent = 2)))
+    } else { 
+      do.call(brms::brm, c(common_args, list(backend = "rstan", init = 0))) 
+    }
+  }, error = function(e) e)
+
+  if (inherits(fit, "error")) return(list(fit = NULL, loo = NULL, error_message = conditionMessage(fit)))
+  
+  loo_res <- tryCatch(suppressWarnings(brms::loo(fit, cores = 1)), error = function(e) e)
+  if (inherits(loo_res, "error")) return(list(fit = fit, loo = NULL, error_message = conditionMessage(loo_res)))
+  
+  list(fit = fit, loo = loo_res, error_message = NA_character_)
+}
+
+extract_score_effect <- function(fit, outcome, score_col, model_name) {
+  fe <- tryCatch(brms::fixef(fit), error = function(e) NULL)
+  coef_names <- rownames(fe)
+  score_coefs <- coef_names[grepl("score_std$", coef_names)]
+  
+  if (length(score_coefs) == 0) {
+    return(tibble(outcome = outcome, score = score_col, model = model_name, category = NA_character_, estimate = NA_real_, est_error = NA_real_, l95 = NA_real_, u95 = NA_real_, prob_positive = NA_real_, score_coef_present = FALSE))
+  }
+  
+  draws <- tryCatch(as.data.frame(brms::as_draws_df(fit)), error = function(e) NULL)
+  
+  purrr::map_dfr(score_coefs, function(sc) {
+    cat_name <- stringr::str_match(sc, "^mu(.*)_score_std$")[, 2]
+    if (is.na(cat_name)) cat_name <- "Base"
+    draw_col <- paste0("b_", sc)
+    prob_positive <- if (!is.null(draws) && draw_col %in% names(draws)) mean(draws[[draw_col]] > 0) else NA_real_
+    
+    tibble(
+      outcome = outcome, score = score_col, model = model_name, category = cat_name,
+      estimate = unname(fe[sc, "Estimate"]), est_error = unname(fe[sc, "Est.Error"]),
+      l95 = unname(fe[sc, "Q2.5"]), u95 = unname(fe[sc, "Q97.5"]),
+      prob_positive = prob_positive, score_coef_present = TRUE
+    )
+  })
+}
+
+# ============================================================
+# Execution Loop
+# ============================================================
+# ============================================================
+# Safe Extractors & Robust Execution Loop
+# ============================================================
+
+# Safe extractor for LOO metrics
+get_loo_est <- function(l, metric, col) {
+  if (is.null(l) || !inherits(l, "loo") || !metric %in% rownames(l$estimates)) return(NA_real_)
+  l$estimates[metric, col]
+}
+
+backend_used <- choose_backend()
+outcome_base <- make_outcome_base_df(dat, score_cols_aligned)
+common_ids <- outcome_base %>% filter(if_all(all_of(score_cols_aligned), is.finite)) %>% pull(id)
+base_common <- outcome_base %>% filter(id %in% common_ids) %>% distinct(id, .keep_all = TRUE)
+
+all_comparisons <- list()
+all_effects <- list()
+
+for (score_col in score_cols_aligned) {
+  message("\n[fit] outcome=type | score=", score_col)
+  df <- make_analysis_df(base_common, score_col)
+  
+  if (dplyr::n_distinct(df$y) < 2) {
+    message("  -> Skipping: Fewer than 2 text types present for this score.")
+    next 
+  }
+
+  forms <- build_forms(df)
+  fit_res <- purrr::map(forms, ~ fit_one_model(.x, df))
+  
+  # Print any underlying Stan errors to the console so we know what is failing
+  purrr::iwalk(fit_res, function(res, name) {
+    if (!is.na(res$error_message)) {
+      message("  -> Model '", name, "' failed to fit: ", res$error_message)
+    }
+  })
+  
+  fit_res_fit_ok <- fit_res[purrr::map_lgl(fit_res, ~ !is.null(.x$fit))]
+  fit_res_loo_ok <- fit_res_fit_ok[purrr::map_lgl(fit_res_fit_ok, ~ !is.null(.x$loo))]
+  
+  # 1. Safely Compare Models
+  if (length(fit_res_loo_ok) > 0) {
+    nm <- names(fit_res_loo_ok)
+    loos <- purrr::map(fit_res_loo_ok, "loo")
+    
+    cmp_tbl <- tibble(
+      outcome = "type", score = score_col, model = nm,
+      elpd_loo = purrr::map_dbl(loos, ~ get_loo_est(.x, "elpd_loo", "Estimate")),
+      elpd_loo_se = purrr::map_dbl(loos, ~ get_loo_est(.x, "elpd_loo", "SE")),
+      looic = purrr::map_dbl(loos, ~ get_loo_est(.x, "looic", "Estimate"))
+    ) %>%
+      arrange(looic) %>%
+      mutate(
+        delta_looic = if (all(is.na(looic))) NA_real_ else looic - min(looic, na.rm = TRUE),
+        rank = row_number()
+      )
+  } else {
+    cmp_tbl <- tibble(outcome = character(), score = character(), model = character(), 
+                      elpd_loo = numeric(), elpd_loo_se = numeric(), looic = numeric(), 
+                      delta_looic = numeric(), rank = integer())
+  }
+    
+  # 2. Safely Extract Effects
+  score_fit_names <- names(fit_res_fit_ok)[formula_has_score(names(fit_res_fit_ok))]
+  
+  if (length(score_fit_names) > 0) {
+    eff_tbl <- purrr::imap_dfr(fit_res_fit_ok[score_fit_names], function(ft, mnm) {
+      extract_score_effect(ft$fit, "type", score_col, mnm)
+    })
+  } else {
+    eff_tbl <- tibble(outcome = character(), score = character(), model = character(), 
+                      category = character(), estimate = numeric(), est_error = numeric(), 
+                      l95 = numeric(), u95 = numeric(), prob_positive = numeric(), 
+                      score_coef_present = logical())
+  }
+
+  all_comparisons[[score_col]] <- cmp_tbl
+  all_effects[[score_col]] <- eff_tbl
+}
+
+# Safely bind rows and format data
+cmp2 <- bind_rows(all_comparisons)
+if (nrow(cmp2) > 0) {
+  cmp2 <- cmp2 %>% 
+    mutate(
+      score_label = pretty_score(score), 
+      model_label = pretty_model(model), 
+      model_plot_label = stringr::str_wrap(model_label, width = 35)
+    )
+}
+
+eff2 <- bind_rows(all_effects)
+if (nrow(eff2) > 0) {
+  eff2 <- eff2 %>% 
+    mutate(
+      score_label = pretty_score(score), 
+      model_label = pretty_model(model), 
+      model_plot_label = stringr::str_wrap(model_label, width = 35), 
+      effect_strength = case_when(
+        prob_positive >= 0.975 ~ "Strong +", 
+        prob_positive >= 0.90 ~ "Moderate +", 
+        prob_positive <= 0.025 ~ "Strong -", 
+        prob_positive <= 0.10 ~ "Moderate -", 
+        TRUE ~ "Weak"
+      ),
+      score_model_order = as.integer(factor(model))
+    )
+}
+
+```
+ 
+
+### Plotting
+
+```{r}
+theme_report <- function(base_size = 13) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.2, linetype = "dotted"),
+      panel.grid.major.x = element_line(color = "grey85", linewidth = 0.4),
+      panel.background = element_rect(fill = "#FAFAFA", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      strip.text = element_text(face = "bold", size = base_size + 1, color = "white"),
+      strip.background = element_rect(fill = "#2C3E50", color = NA),
+      axis.title = element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+}
+
+make_loo_plot <- function(data, predictor_value) {
+  if (nrow(data) == 0) return(NULL)
+  df <- data %>% filter(score_label == predictor_value, !is.na(delta_looic))
+  if (nrow(df) == 0) return(NULL)
+
+  df <- df %>% mutate(model_plot = tidytext::reorder_within(model_plot_label, -delta_looic, score_label))
+
+  ggplot(df, aes(x = delta_looic, y = model_plot, color = delta_looic)) +
+    geom_vline(xintercept = 2, linetype = 2, linewidth = 0.8, color = "#E74C3C") +
+    geom_segment(aes(x = 0, xend = delta_looic, yend = model_plot), linewidth = 1.2, alpha = 0.7) +
+    geom_point(size = 4) +
+    tidytext::scale_y_reordered() +
+    scale_color_viridis_c(option = "plasma", direction = -1, guide = "none") +
+    labs(title = paste("LOOIC vs Best | Predictor:", predictor_value), x = expression(Delta * " LOOIC"), y = "Model") +
+    theme_report()
+}
+
+make_effect_density_plot <- function(data, predictor_value) {
+  if (nrow(data) == 0) return(NULL)
+  df <- data %>% filter(score_label == predictor_value, !is.na(estimate))
+  if (nrow(df) == 0) return(NULL)
+
+  df <- df %>%
+    mutate(
+      panel_id = paste("Type:", category),
+      model_plot = tidytext::reorder_within(model_plot_label, -score_model_order, panel_id)
+    )
+
+  ggplot(df, aes(y = model_plot)) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8, color = "#E74C3C") +
+    ggdist::stat_dist_halfeye(
+      aes(dist = distributional::dist_normal(estimate, est_error), fill = effect_strength),
+      alpha = 0.85, justification = -0.1
+    ) +
+    facet_wrap(~ panel_id, scales = "free_y", ncol = 2) +
+    tidytext::scale_y_reordered() +
+    scale_fill_manual(
+      values = c("Strong +" = "#2ECC71", "Moderate +" = "#A9DFBF", "Weak" = "#BDC3C7", "Moderate -" = "#F5B041", "Strong -" = "#E74C3C"),
+      breaks = c("Strong -", "Moderate -", "Weak", "Moderate +", "Strong +")
+    ) +
+    labs(
+      title = paste("Effects on Text Type Categories | Predictor:", predictor_value),
+      x = "Standardized Score Effect", y = "Model", fill = "Posterior Support"
+    ) +
+    theme_report()
+}
+
+fig_dir <- "../../results/predictions/non_transformer_lemmatized/600ad/negative_control/report/figures"
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+clean_name <- function(x) {
+  x |>
+    tolower() |>
+    gsub("[^a-z0-9]+", "_", x = _) |>
+    gsub("^_|_$", "", x = _)
+}
+
+if (nrow(cmp2) > 0 && nrow(eff2) > 0) {
+  for (pred_value in unique(cmp2$score_label)) {
+    p_loo <- make_loo_plot(cmp2, pred_value)
+    p_eff <- make_effect_density_plot(eff2, pred_value)
+    pred_stub <- clean_name(pred_value)
+
+    if (!is.null(p_loo)) {
+      ggsave(
+        filename = file.path(fig_dir, paste0("looic_", pred_stub, ".png")),
+        plot = p_loo, width = 10, height = 6, dpi = 300, bg = "white"
+      )
+    }
+
+    if (!is.null(p_eff)) {
+      ggsave(
+        filename = file.path(fig_dir, paste0("effects_", pred_stub, ".png")),
+        plot = p_eff, width = 12, height = 8, dpi = 300, bg = "white"
+      )
+    }
+
+    if (!is.null(p_loo) && !is.null(p_eff)) {
+      combined <- p_loo / p_eff + plot_layout(heights = c(1, 2))
+      print(combined)
+      ggsave(
+        filename = file.path(fig_dir, paste0("combined_", pred_stub, ".png")),
+        plot = combined, width = 12, height = 14, dpi = 300, bg = "white"
+      )
+    } else if (!is.null(p_eff)) {
+      print(p_eff)
+    }
+  }
+} else {
+  message("No valid models were produced. Skipping plotting step.")
+}
+```

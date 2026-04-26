@@ -1,0 +1,11 @@
+outcome_label,score_label,models_attempted,models_fit_ok,models_loo_ok,score_models_missing_coef
+Document length (characters),LightGBM,18,18,18,0
+Document length (characters),Naive Bayes,18,18,18,0
+Document length (characters),Ridge,18,18,18,0
+Document length (characters),SVM,18,18,18,0
+Document length (characters),XGBoost,18,18,18,0
+Document length (words),LightGBM,18,18,18,0
+Document length (words),Naive Bayes,18,18,18,0
+Document length (words),Ridge,18,18,18,0
+Document length (words),SVM,18,18,18,0
+Document length (words),XGBoost,18,18,18,0

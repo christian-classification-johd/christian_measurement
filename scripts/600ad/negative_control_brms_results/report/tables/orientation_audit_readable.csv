@@ -1,0 +1,6 @@
+score,auc_raw,flipped,auc_aligned,score_label,flipped_label
+score_svm_logit,0.981,FALSE,0.981,SVM score,Kept
+score_ridge_logit,0.978,FALSE,0.978,Ridge score,Kept
+score_lgb_logit,0.968,FALSE,0.968,LightGBM score,Kept
+score_xgb_logit,0.964,FALSE,0.964,XGBoost score,Kept
+score_nb_logit,0.963,FALSE,0.963,Naive Bayes score,Kept

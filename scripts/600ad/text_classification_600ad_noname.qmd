@@ -78,6 +78,11 @@ library(xgboost)
 library(lightgbm)
 library(Matrix)
 library(pROC)
+library(keras3)
+library(tensorflow)
+
+keras3::use_backend("tensorflow")
+keras3::config_disable_interactive_logging()
 
 set.seed(123)
 
@@ -97,6 +102,37 @@ xgb_max_rounds    <- 4000L
 lgb_max_rounds    <- 4000L
 early_stop_rounds <- 100L
 min_docfreq       <- 3L
+
+run_tfidf_mlp <- TRUE
+run_word_cnn  <- TRUE
+
+keras_batch_size <- 32L
+keras_patience   <- 3L
+keras_val_frac   <- 0.1
+
+tfidf_mlp_grid <- tidyr::crossing(
+  max_tokens   = c(5000L, 10000L),
+  hidden_units = c(128L, 256L),
+  dropout      = c(0.2, 0.4),
+  lr           = c(1e-3, 5e-4),
+  epochs       = c(10L, 15L)
+) %>%
+  dplyr::mutate(candidate_id = dplyr::row_number()) %>%
+  dplyr::select(candidate_id, dplyr::everything())
+
+word_cnn_grid <- tidyr::crossing(
+  max_tokens  = c(10000L, 20000L),
+  seq_length  = c(750L, 1500L),
+  embed_dim   = c(100L, 200L),
+  filters     = c(128L),
+  kernel_size = c(5L, 7L),
+  dense_units = c(128L),
+  dropout     = c(0.3, 0.5),
+  lr          = c(1e-3),
+  epochs      = c(10L, 15L)
+) %>%
+  dplyr::mutate(candidate_id = dplyr::row_number()) %>%
+  dplyr::select(candidate_id, dplyr::everything())
 ```
 
 ```{r load-data}
@@ -1091,6 +1127,216 @@ cv_nb_scores_ckpt <- function(x_dfm, y, k = 5, seed = 123,
 }
 ```
 
+
+## Neural-text helper functions
+
+```{r neural-text-helpers}
+as_text_input <- function(text) {
+  x <- unname(enc2utf8(as.character(text)))
+  x[is.na(x)] <- ""
+  x
+}
+
+as_text_named_input <- function(text) {
+  list(text = as_text_input(text))
+}
+
+prep_text_for_neural <- function(text_data, stop_list) {
+  toks <- quanteda::tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
+    quanteda::tokens_tolower() %>%
+    quanteda::tokens_remove(pattern = stop_list, valuetype = "fixed")
+
+  vapply(
+    seq_along(toks),
+    function(i) paste(as.character(toks[[i]]), collapse = " "),
+    FUN.VALUE = character(1)
+  )
+}
+
+build_tfidf_mlp_model <- function(train_text, cfg) {
+  text_in <- keras3::layer_input(shape = c(1L), dtype = "string", name = "text")
+
+  vec <- keras3::layer_text_vectorization(
+    max_tokens = as.integer(cfg$max_tokens),
+    standardize = "lower_and_strip_punctuation",
+    split = "whitespace",
+    output_mode = "tf_idf",
+    sparse = FALSE,
+    pad_to_max_tokens = TRUE
+  )
+  keras3::adapt(vec, as_text_input(train_text))
+
+  x <- vec(text_in) %>%
+    keras3::layer_dense(units = as.integer(cfg$hidden_units), activation = "relu") %>%
+    keras3::layer_dropout(rate = as.numeric(cfg$dropout)) %>%
+    keras3::layer_dense(units = 1)
+
+  model <- keras3::keras_model(text_in, x)
+  model %>% keras3::compile(
+    optimizer = keras3::optimizer_adam(learning_rate = as.numeric(cfg$lr)),
+    loss = keras3::loss_binary_crossentropy(from_logits = TRUE)
+  )
+  model
+}
+
+build_word_cnn_model <- function(train_text, cfg) {
+  text_in <- keras3::layer_input(shape = c(1L), dtype = "string", name = "text")
+
+  vec <- keras3::layer_text_vectorization(
+    max_tokens = as.integer(cfg$max_tokens),
+    standardize = "lower_and_strip_punctuation",
+    split = "whitespace",
+    output_mode = "int",
+    output_sequence_length = as.integer(cfg$seq_length)
+  )
+  keras3::adapt(vec, as_text_input(train_text))
+
+  x <- vec(text_in) %>%
+    keras3::layer_embedding(
+      input_dim = as.integer(cfg$max_tokens + 2L),
+      output_dim = as.integer(cfg$embed_dim)
+    ) %>%
+    keras3::layer_conv_1d(
+      filters = as.integer(cfg$filters),
+      kernel_size = as.integer(cfg$kernel_size),
+      activation = "relu"
+    ) %>%
+    keras3::layer_global_max_pooling_1d() %>%
+    keras3::layer_dense(units = as.integer(cfg$dense_units), activation = "relu") %>%
+    keras3::layer_dropout(rate = as.numeric(cfg$dropout)) %>%
+    keras3::layer_dense(units = 1)
+
+  model <- keras3::keras_model(text_in, x)
+  model %>% keras3::compile(
+    optimizer = keras3::optimizer_adam(learning_rate = as.numeric(cfg$lr)),
+    loss = keras3::loss_binary_crossentropy(from_logits = TRUE)
+  )
+  model
+}
+
+fit_predict_keras_text_scores <- function(train_text, y_train, test_text,
+                                          build_fun, cfg, seed = 123) {
+  keras3::clear_session()
+  keras3::set_random_seed(as.integer(seed))
+
+  model <- build_fun(train_text, cfg)
+
+  model %>% keras3::fit(
+    x = as_text_named_input(train_text),
+    y = as.integer(y_train == "christian"),
+    validation_split = keras_val_frac,
+    epochs = as.integer(cfg$epochs),
+    batch_size = as.integer(cfg$batch_size %||% keras_batch_size),
+    callbacks = list(
+      keras3::callback_early_stopping(
+        monitor = "val_loss",
+        patience = as.integer(keras_patience),
+        restore_best_weights = TRUE
+      )
+    ),
+    verbose = 0
+  )
+
+  out <- as.numeric(model %>% predict(as_text_named_input(test_text), verbose = 0))
+  keras3::clear_session()
+  out
+}
+
+cv_keras_text_scores_ckpt <- function(text, y, build_fun, cfg,
+                                      k = 5, seed = 123,
+                                      prefix = "", ckpt_dir,
+                                      model_tag = "keras_text") {
+  ensure_dir(ckpt_dir)
+  state_path <- file.path(ckpt_dir, "state.rds")
+  folds <- make_folds(y, k, seed)
+  state <- load_rds_or_null(state_path) %||%
+    list(scores = rep(NA_real_, length(y)),
+         done = rep(FALSE, length(folds)))
+
+  for (j in seq_along(folds)) {
+    if (isTRUE(state$done[j])) next
+    log_progress(
+      paste0(model_tag, "_calibration_fold"),
+      paste(prefix, "fold", j, "of", length(folds))
+    )
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    state$scores[va] <- fit_predict_keras_text_scores(
+      train_text = text[tr],
+      y_train = y[tr],
+      test_text = text[va],
+      build_fun = build_fun,
+      cfg = cfg,
+      seed = seed + j
+    )
+    state$done[j] <- TRUE
+    save_rds_atomic(state, state_path)
+  }
+
+  state$scores
+}
+
+tune_keras_text_model_ckpt <- function(text, y, grid, build_fun,
+                                       inner_k = 5, seed = 123,
+                                       prefix = "", ckpt_dir,
+                                       model_tag = "keras_text") {
+  ensure_dir(ckpt_dir)
+  folds <- make_folds(y, inner_k, seed)
+  summary_path <- file.path(ckpt_dir, "summary.rds")
+  summary_state <- load_rds_or_null(summary_path) %||%
+    list(done = rep(FALSE, nrow(grid)))
+
+  for (g in seq_len(nrow(grid))) {
+    if (isTRUE(summary_state$done[g])) next
+    cand_path <- file.path(ckpt_dir, sprintf("candidate_%03d.rds", g))
+    cand_state <- load_rds_or_null(cand_path) %||%
+      list(scores = rep(NA_real_, length(y)),
+           done = rep(FALSE, length(folds)))
+    cfg <- as.list(grid[g, , drop = FALSE])
+
+    for (j in seq_along(folds)) {
+      if (isTRUE(cand_state$done[j])) next
+      log_progress(
+        paste0(model_tag, "_tuning_fold"),
+        paste(prefix, "candidate", g, "of", nrow(grid),
+              "fold", j, "of", length(folds))
+      )
+      va <- folds[[j]]
+      tr <- setdiff(seq_along(y), va)
+      cand_state$scores[va] <- fit_predict_keras_text_scores(
+        train_text = text[tr],
+        y_train = y[tr],
+        test_text = text[va],
+        build_fun = build_fun,
+        cfg = cfg,
+        seed = seed + 1000L * g + j
+      )
+      cand_state$done[j] <- TRUE
+      save_rds_atomic(cand_state, cand_path)
+    }
+
+    summary_state$done[g] <- TRUE
+    save_rds_atomic(summary_state, summary_path)
+  }
+
+  tuning_rows <- lapply(seq_len(nrow(grid)), function(g) {
+    cs <- readRDS(file.path(ckpt_dir, sprintf("candidate_%03d.rds", g)))
+    dplyr::bind_cols(
+      grid[g, , drop = FALSE],
+      tibble::tibble(
+        log_loss = log_loss_safe(y, plogis(cs$scores)),
+        auc_margin = auc_margin_safe(y, cs$scores)
+      )
+    )
+  })
+
+  tuning <- dplyr::bind_rows(tuning_rows) %>%
+    dplyr::arrange(log_loss, dplyr::desc(auc_margin))
+
+  list(best = tuning[1, , drop = FALSE], tuning = tuning)
+}
+```
+
 ## Nested cross-validation (outer loop)
 
 ```{r setup-run}
@@ -1158,7 +1404,10 @@ is_done <- function(state, key, bucket = c("model_done", "full_done")) {
 
 state_path <- file.path(checkpoint_root, "run_state.rds")
 state <- load_rds_or_null(state_path)
-if (is.null(state) || length(state$nb_oof) != n_lab) {
+if (is.null(state) ||
+    length(state$nb_oof) != n_lab ||
+    is.null(state$tfidf_mlp_oof) ||
+    is.null(state$word_cnn_oof)) {
   state <- init_run_state(n_lab)
   save_rds_atomic(state, state_path)
 }
@@ -1181,6 +1430,9 @@ for (i in seq_along(outer_folds)) {
   x_va_dfm  <- transform_counts_dfm(lab$text[va], vec_fold, latin_stops)
   x_tr      <- transform_tfidf_sparse(lab$text[tr], vec_fold, latin_stops)
   x_va      <- transform_tfidf_sparse(lab$text[va], vec_fold, latin_stops)
+
+  text_tr_neural <- prep_text_for_neural(lab$text[tr], latin_stops)
+  text_va_neural <- prep_text_for_neural(lab$text[va], latin_stops)
 
   state$outer_fold_id[va] <- i
   save_rds_atomic(state, state_path)
@@ -1441,6 +1693,176 @@ for (i in seq_along(outer_folds)) {
     state <- mark_done(state, key, "model_done")
     save_rds_atomic(state, state_path)
   }
+
+  # -- TF-IDF MLP ----------------------------------------------------------------------
+  if (isTRUE(run_tfidf_mlp)) {
+    key <- paste0("outer_", i, "_tfidf_mlp")
+    if (!is_done(state, key, "model_done")) {
+      model_dir <- file.path(outer_dir, "tfidf_mlp")
+
+      tfidf_tuned <- tune_keras_text_model_ckpt(
+        text = text_tr_neural,
+        y = y_tr,
+        grid = tfidf_mlp_grid,
+        build_fun = build_tfidf_mlp_model,
+        inner_k = k_folds_inner,
+        seed = 6000 + i,
+        prefix = paste("outer", i),
+        ckpt_dir = file.path(model_dir, "tuning"),
+        model_tag = "tfidf_mlp"
+      )
+
+      tfidf_cfg <- as.list(tfidf_tuned$best[1, , drop = FALSE])
+      tfidf_train_scores <- cv_keras_text_scores_ckpt(
+        text = text_tr_neural,
+        y = y_tr,
+        build_fun = build_tfidf_mlp_model,
+        cfg = tfidf_cfg,
+        k = k_folds_inner,
+        seed = 6100 + i,
+        prefix = paste("outer", i),
+        ckpt_dir = file.path(model_dir, "calibration"),
+        model_tag = "tfidf_mlp"
+      )
+
+      tfidf_platt <- fit_platt(tfidf_train_scores, y_tr)
+      tfidf_va_scores <- fit_predict_keras_text_scores(
+        train_text = text_tr_neural,
+        y_train = y_tr,
+        test_text = text_va_neural,
+        build_fun = build_tfidf_mlp_model,
+        cfg = tfidf_cfg,
+        seed = 6200 + i
+      )
+      tfidf_train_prob <- apply_platt(tfidf_platt, tfidf_train_scores)
+      tfidf_va_prob <- apply_platt(tfidf_platt, tfidf_va_scores)
+      tfidf_th_y <- choose_threshold(y_tr, tfidf_train_prob, "youden")
+      tfidf_th_f <- choose_threshold(y_tr, tfidf_train_prob, "f1")
+
+      state$tfidf_mlp_oof[va] <- tfidf_va_prob
+      state$tfidf_mlp_score_oof[va] <- tfidf_va_scores
+      state$tfidf_mlp_pred_youden_oof[va] <- ifelse(tfidf_va_prob >= tfidf_th_y,
+                                                    "christian", "non_christian")
+      state$tfidf_mlp_pred_f1_oof[va] <- ifelse(tfidf_va_prob >= tfidf_th_f,
+                                                "christian", "non_christian")
+
+      threshold_row <- tibble(
+        outer_fold = i,
+        model = "tfidf_mlp",
+        threshold_youden = tfidf_th_y,
+        threshold_f1 = tfidf_th_f
+      )
+      metric_row <- summarize_model_fold(
+        y_va,
+        tfidf_va_prob,
+        state$tfidf_mlp_pred_youden_oof[va],
+        state$tfidf_mlp_pred_f1_oof[va],
+        "tfidf_mlp",
+        i
+      )
+      selected_row <- tfidf_tuned$best %>%
+        mutate(
+          outer_fold = i,
+          model = "tfidf_mlp",
+          threshold_youden = tfidf_th_y,
+          threshold_f1 = tfidf_th_f
+        )
+
+      state$outer_threshold_df <- upsert_rows(state$outer_threshold_df,
+                                              threshold_row, c("outer_fold", "model"))
+      state$fold_metric_df <- upsert_rows(state$fold_metric_df,
+                                          metric_row, c("outer_fold", "model"))
+      state$selected_outer_df <- upsert_rows(state$selected_outer_df,
+                                             selected_row, c("outer_fold", "model"))
+      state <- mark_done(state, key, "model_done")
+      save_rds_atomic(state, state_path)
+    }
+  }
+
+  # -- Word CNN ------------------------------------------------------------------------
+  if (isTRUE(run_word_cnn)) {
+    key <- paste0("outer_", i, "_word_cnn")
+    if (!is_done(state, key, "model_done")) {
+      model_dir <- file.path(outer_dir, "word_cnn")
+
+      cnn_tuned <- tune_keras_text_model_ckpt(
+        text = text_tr_neural,
+        y = y_tr,
+        grid = word_cnn_grid,
+        build_fun = build_word_cnn_model,
+        inner_k = k_folds_inner,
+        seed = 7000 + i,
+        prefix = paste("outer", i),
+        ckpt_dir = file.path(model_dir, "tuning"),
+        model_tag = "word_cnn"
+      )
+
+      cnn_cfg <- as.list(cnn_tuned$best[1, , drop = FALSE])
+      cnn_train_scores <- cv_keras_text_scores_ckpt(
+        text = text_tr_neural,
+        y = y_tr,
+        build_fun = build_word_cnn_model,
+        cfg = cnn_cfg,
+        k = k_folds_inner,
+        seed = 7100 + i,
+        prefix = paste("outer", i),
+        ckpt_dir = file.path(model_dir, "calibration"),
+        model_tag = "word_cnn"
+      )
+
+      cnn_platt <- fit_platt(cnn_train_scores, y_tr)
+      cnn_va_scores <- fit_predict_keras_text_scores(
+        train_text = text_tr_neural,
+        y_train = y_tr,
+        test_text = text_va_neural,
+        build_fun = build_word_cnn_model,
+        cfg = cnn_cfg,
+        seed = 7200 + i
+      )
+      cnn_train_prob <- apply_platt(cnn_platt, cnn_train_scores)
+      cnn_va_prob <- apply_platt(cnn_platt, cnn_va_scores)
+      cnn_th_y <- choose_threshold(y_tr, cnn_train_prob, "youden")
+      cnn_th_f <- choose_threshold(y_tr, cnn_train_prob, "f1")
+
+      state$word_cnn_oof[va] <- cnn_va_prob
+      state$word_cnn_score_oof[va] <- cnn_va_scores
+      state$word_cnn_pred_youden_oof[va] <- ifelse(cnn_va_prob >= cnn_th_y,
+                                                   "christian", "non_christian")
+      state$word_cnn_pred_f1_oof[va] <- ifelse(cnn_va_prob >= cnn_th_f,
+                                               "christian", "non_christian")
+
+      threshold_row <- tibble(
+        outer_fold = i,
+        model = "word_cnn",
+        threshold_youden = cnn_th_y,
+        threshold_f1 = cnn_th_f
+      )
+      metric_row <- summarize_model_fold(
+        y_va,
+        cnn_va_prob,
+        state$word_cnn_pred_youden_oof[va],
+        state$word_cnn_pred_f1_oof[va],
+        "word_cnn",
+        i
+      )
+      selected_row <- cnn_tuned$best %>%
+        mutate(
+          outer_fold = i,
+          model = "word_cnn",
+          threshold_youden = cnn_th_y,
+          threshold_f1 = cnn_th_f
+        )
+
+      state$outer_threshold_df <- upsert_rows(state$outer_threshold_df,
+                                              threshold_row, c("outer_fold", "model"))
+      state$fold_metric_df <- upsert_rows(state$fold_metric_df,
+                                          metric_row, c("outer_fold", "model"))
+      state$selected_outer_df <- upsert_rows(state$selected_outer_df,
+                                             selected_row, c("outer_fold", "model"))
+      state <- mark_done(state, key, "model_done")
+      save_rds_atomic(state, state_path)
+    }
+  }
 }
 
 log_progress("outer_loop_done", "all outer folds complete")
@@ -1457,6 +1879,9 @@ x_lab_dfm_full <- transform_counts_dfm(lab$text, vec_full, latin_stops)
 x_all_dfm_full <- transform_counts_dfm(out$text, vec_full, latin_stops)
 x_lab_full     <- transform_tfidf_sparse(lab$text, vec_full, latin_stops)
 x_all_full     <- transform_tfidf_sparse(out$text, vec_full, latin_stops)
+
+text_lab_neural_full <- prep_text_for_neural(lab$text, latin_stops)
+text_all_neural_full <- prep_text_for_neural(out$text, latin_stops)
 
 full_predictions <- tibble(row_id = out$row_id, id = out$id,
                            manual_label = out$manual_label)
@@ -1557,6 +1982,86 @@ lgb_all_prob   <- apply_platt(lgb_platt_full, lgb_all_scores)
 lgb_deploy_th_y <- choose_threshold(lab$manual_label, lgb_lab_prob_cf, "youden")
 lgb_deploy_th_f <- choose_threshold(lab$manual_label, lgb_lab_prob_cf, "f1")
 
+# -- TF-IDF MLP ----------------------------------------------------------------------
+if (isTRUE(run_tfidf_mlp)) {
+  tfidf_tuned_full <- tune_keras_text_model_ckpt(
+    text = text_lab_neural_full,
+    y = lab$manual_label,
+    grid = tfidf_mlp_grid,
+    build_fun = build_tfidf_mlp_model,
+    inner_k = k_folds_inner,
+    seed = 9001,
+    prefix = "full",
+    ckpt_dir = file.path(full_dir, "tfidf_mlp", "tuning"),
+    model_tag = "tfidf_mlp"
+  )
+  tfidf_cfg_full <- as.list(tfidf_tuned_full$best[1, , drop = FALSE])
+  tfidf_cv_scores <- cv_keras_text_scores_ckpt(
+    text = text_lab_neural_full,
+    y = lab$manual_label,
+    build_fun = build_tfidf_mlp_model,
+    cfg = tfidf_cfg_full,
+    k = k_folds_inner,
+    seed = 9101,
+    prefix = "full",
+    ckpt_dir = file.path(full_dir, "tfidf_mlp", "calibration"),
+    model_tag = "tfidf_mlp"
+  )
+  tfidf_platt_full <- fit_platt(tfidf_cv_scores, lab$manual_label)
+  tfidf_lab_prob_cf <- apply_platt(tfidf_platt_full, tfidf_cv_scores)
+  tfidf_all_scores <- fit_predict_keras_text_scores(
+    train_text = text_lab_neural_full,
+    y_train = lab$manual_label,
+    test_text = text_all_neural_full,
+    build_fun = build_tfidf_mlp_model,
+    cfg = tfidf_cfg_full,
+    seed = 9201
+  )
+  tfidf_all_prob <- apply_platt(tfidf_platt_full, tfidf_all_scores)
+  tfidf_deploy_th_y <- choose_threshold(lab$manual_label, tfidf_lab_prob_cf, "youden")
+  tfidf_deploy_th_f <- choose_threshold(lab$manual_label, tfidf_lab_prob_cf, "f1")
+}
+
+# -- Word CNN ------------------------------------------------------------------------
+if (isTRUE(run_word_cnn)) {
+  cnn_tuned_full <- tune_keras_text_model_ckpt(
+    text = text_lab_neural_full,
+    y = lab$manual_label,
+    grid = word_cnn_grid,
+    build_fun = build_word_cnn_model,
+    inner_k = k_folds_inner,
+    seed = 9002,
+    prefix = "full",
+    ckpt_dir = file.path(full_dir, "word_cnn", "tuning"),
+    model_tag = "word_cnn"
+  )
+  cnn_cfg_full <- as.list(cnn_tuned_full$best[1, , drop = FALSE])
+  cnn_cv_scores <- cv_keras_text_scores_ckpt(
+    text = text_lab_neural_full,
+    y = lab$manual_label,
+    build_fun = build_word_cnn_model,
+    cfg = cnn_cfg_full,
+    k = k_folds_inner,
+    seed = 9102,
+    prefix = "full",
+    ckpt_dir = file.path(full_dir, "word_cnn", "calibration"),
+    model_tag = "word_cnn"
+  )
+  cnn_platt_full <- fit_platt(cnn_cv_scores, lab$manual_label)
+  cnn_lab_prob_cf <- apply_platt(cnn_platt_full, cnn_cv_scores)
+  cnn_all_scores <- fit_predict_keras_text_scores(
+    train_text = text_lab_neural_full,
+    y_train = lab$manual_label,
+    test_text = text_all_neural_full,
+    build_fun = build_word_cnn_model,
+    cfg = cnn_cfg_full,
+    seed = 9202
+  )
+  cnn_all_prob <- apply_platt(cnn_platt_full, cnn_all_scores)
+  cnn_deploy_th_y <- choose_threshold(lab$manual_label, cnn_lab_prob_cf, "youden")
+  cnn_deploy_th_f <- choose_threshold(lab$manual_label, cnn_lab_prob_cf, "f1")
+}
+
 log_progress("full_fits_done", "all deployment models trained")
 ```
 
@@ -1579,14 +2084,28 @@ prob_lgb[lab_pos]   <- lgb_lab_prob_cf
 
 score_enet_logit[lab_pos] <- enet_lab_score_cf
 
-deployment_thresholds <- tibble(
-  model = c("naive_bayes", "elastic_net", "svm_platt", "xgboost", "lightgbm"),
-  threshold_youden = c(nb_deploy_th_y, enet_deploy_th_y, svm_deploy_th_y,
-                       xgb_deploy_th_y, lgb_deploy_th_y),
-  threshold_f1     = c(nb_deploy_th_f, enet_deploy_th_f, svm_deploy_th_f,
-                       xgb_deploy_th_f, lgb_deploy_th_f),
-  threshold_scope  = "full_labeled_cross_fitted_calibrated"
-)
+if (isTRUE(run_tfidf_mlp)) {
+  prob_tfidf_mlp <- tfidf_all_prob
+  score_tfidf_mlp <- tfidf_all_scores
+  prob_tfidf_mlp[lab_pos] <- tfidf_lab_prob_cf
+}
+
+if (isTRUE(run_word_cnn)) {
+  prob_word_cnn <- cnn_all_prob
+  score_word_cnn <- cnn_all_scores
+  prob_word_cnn[lab_pos] <- cnn_lab_prob_cf
+}
+
+deployment_thresholds <- bind_rows(
+  tibble(model = "naive_bayes", threshold_youden = nb_deploy_th_y, threshold_f1 = nb_deploy_th_f),
+  tibble(model = "elastic_net", threshold_youden = enet_deploy_th_y, threshold_f1 = enet_deploy_th_f),
+  tibble(model = "svm_platt", threshold_youden = svm_deploy_th_y, threshold_f1 = svm_deploy_th_f),
+  tibble(model = "xgboost", threshold_youden = xgb_deploy_th_y, threshold_f1 = xgb_deploy_th_f),
+  tibble(model = "lightgbm", threshold_youden = lgb_deploy_th_y, threshold_f1 = lgb_deploy_th_f),
+  if (isTRUE(run_tfidf_mlp)) tibble(model = "tfidf_mlp", threshold_youden = tfidf_deploy_th_y, threshold_f1 = tfidf_deploy_th_f),
+  if (isTRUE(run_word_cnn)) tibble(model = "word_cnn", threshold_youden = cnn_deploy_th_y, threshold_f1 = cnn_deploy_th_f)
+) %>%
+  mutate(threshold_scope = "full_labeled_cross_fitted_calibrated")
 
 get_threshold <- function(model_name, kind = c("youden", "f1")) {
   kind <- match.arg(kind)
@@ -1633,7 +2152,29 @@ out <- out %>%
     label_lgb_youden = if_else(prob_lgb >= get_threshold("lightgbm", "youden"),
                                 "christian", "non_christian"),
     label_lgb_f1     = if_else(prob_lgb >= get_threshold("lightgbm", "f1"),
-                                "christian", "non_christian")
+                                "christian", "non_christian"),
+
+    prob_tfidf_mlp = if (isTRUE(run_tfidf_mlp)) safe_prob(prob_tfidf_mlp) else NA_real_,
+    score_tfidf_mlp_logit = if (isTRUE(run_tfidf_mlp)) score_tfidf_mlp else NA_real_,
+    label_tfidf_mlp_youden = if (isTRUE(run_tfidf_mlp)) if_else(
+      prob_tfidf_mlp >= get_threshold("tfidf_mlp", "youden"),
+      "christian", "non_christian"
+    ) else NA_character_,
+    label_tfidf_mlp_f1 = if (isTRUE(run_tfidf_mlp)) if_else(
+      prob_tfidf_mlp >= get_threshold("tfidf_mlp", "f1"),
+      "christian", "non_christian"
+    ) else NA_character_,
+
+    prob_word_cnn = if (isTRUE(run_word_cnn)) safe_prob(prob_word_cnn) else NA_real_,
+    score_word_cnn_logit = if (isTRUE(run_word_cnn)) score_word_cnn else NA_real_,
+    label_word_cnn_youden = if (isTRUE(run_word_cnn)) if_else(
+      prob_word_cnn >= get_threshold("word_cnn", "youden"),
+      "christian", "non_christian"
+    ) else NA_character_,
+    label_word_cnn_f1 = if (isTRUE(run_word_cnn)) if_else(
+      prob_word_cnn >= get_threshold("word_cnn", "f1"),
+      "christian", "non_christian"
+    ) else NA_character_
   )
 ```
 
@@ -1655,7 +2196,21 @@ model_metrics_oof <- bind_rows(
                       "xgboost"),
   summarize_model_oof(lab$manual_label, state$lgb_oof,
                       state$lgb_pred_youden_oof, state$lgb_pred_f1_oof,
-                      "lightgbm")
+                      "lightgbm"),
+  if (isTRUE(run_tfidf_mlp)) summarize_model_oof(
+    lab$manual_label,
+    state$tfidf_mlp_oof,
+    state$tfidf_mlp_pred_youden_oof,
+    state$tfidf_mlp_pred_f1_oof,
+    "tfidf_mlp"
+  ),
+  if (isTRUE(run_word_cnn)) summarize_model_oof(
+    lab$manual_label,
+    state$word_cnn_oof,
+    state$word_cnn_pred_youden_oof,
+    state$word_cnn_pred_f1_oof,
+    "word_cnn"
+  )
 )
 
 oof_eval_predictions <- tibble(
@@ -1680,7 +2235,17 @@ oof_eval_predictions <- tibble(
 
   prob_lgb  = state$lgb_oof,  score_lgb_margin = state$lgb_score_oof,
   label_lgb_youden  = state$lgb_pred_youden_oof,
-  label_lgb_f1      = state$lgb_pred_f1_oof
+  label_lgb_f1      = state$lgb_pred_f1_oof,
+
+  prob_tfidf_mlp = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_oof else NA_real_,
+  score_tfidf_mlp_logit = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_score_oof else NA_real_,
+  label_tfidf_mlp_youden = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_pred_youden_oof else NA_character_,
+  label_tfidf_mlp_f1 = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_pred_f1_oof else NA_character_,
+
+  prob_word_cnn = if (isTRUE(run_word_cnn)) state$word_cnn_oof else NA_real_,
+  score_word_cnn_logit = if (isTRUE(run_word_cnn)) state$word_cnn_score_oof else NA_real_,
+  label_word_cnn_youden = if (isTRUE(run_word_cnn)) state$word_cnn_pred_youden_oof else NA_character_,
+  label_word_cnn_f1 = if (isTRUE(run_word_cnn)) state$word_cnn_pred_f1_oof else NA_character_
 )
 
 selected_full <- bind_rows(
@@ -1691,7 +2256,9 @@ selected_full <- bind_rows(
          lambda_min = enet_tuned_full$lambda_min),
   tibble(model = "svm_platt", cost = svm_tuned_full$cost),
   xgb_tuned_full$best %>% mutate(model = "xgboost"),
-  lgb_tuned_full$best %>% mutate(model = "lightgbm")
+  lgb_tuned_full$best %>% mutate(model = "lightgbm"),
+  if (isTRUE(run_tfidf_mlp)) tfidf_tuned_full$best %>% mutate(model = "tfidf_mlp"),
+  if (isTRUE(run_word_cnn)) cnn_tuned_full$best %>% mutate(model = "word_cnn")
 )
 
 dir.create(results_path, recursive = TRUE, showWarnings = FALSE)
@@ -1752,774 +2319,3 @@ print(model_metrics_oof %>%
 
 log_progress("done", "pipeline complete")
 ```
-
-
-
-
-# Patch blocks to add non-transformer deep models in R
-
-These are the two R additions I would wire in first:
-
-- `tfidf_mlp`: a dense neural net on TF-IDF built inside `keras3::layer_text_vectorization(output_mode = "tf_idf")`
-- `word_cnn`: a token-sequence CNN built in `keras3`
-
-I am **not** adding char-CNN here. It is possible, but it is the first one most likely to become slow and annoying in your current checkpointed nested-CV setup.
-
----
-
-## 1) Add to the setup chunk
-
-Paste these lines into `setup-paths` right after your existing libraries.
-
-```{r}
-library(keras3)
-library(tensorflow)
-
-keras3::use_backend("tensorflow")
-keras3::config_disable_interactive_logging()
-```
-
-```{r}
-
-library(dplyr)
-library(tidyr)
-library(purrr)
-library(rsample)
-library(yardstick)
-library(keras3)
-library(tensorflow)
-
-keras3::clear_session()
-gc()
-```
-
-```{r}
-run_tfidf_mlp <- TRUE
-run_word_cnn  <- TRUE
-
-keras_batch_size <- 32L
-keras_patience   <- 3L
-keras_val_frac   <- 0.1
-
-# Keep these modest at first. Once the code runs end-to-end, widen the grids.
-tfidf_mlp_grid <- tidyr::crossing(
-  max_tokens   = c(5000L, 10000L),
-  hidden_units = c(128L, 256L),
-  dropout      = c(0.2, 0.4),
-  lr           = c(1e-3, 5e-4),
-  epochs       = c(10L, 15L)
-) %>%
-  dplyr::mutate(candidate_id = dplyr::row_number()) %>%
-  dplyr::select(candidate_id, dplyr::everything())
-
-word_cnn_grid <- tidyr::crossing(
-  max_tokens  = c(10000L, 20000L),
-  seq_length  = c(750L, 1500L),
-  embed_dim   = c(100L, 200L),
-  filters     = c(128L),
-  kernel_size = c(5L, 7L),
-  dense_units = c(128L),
-  dropout     = c(0.3, 0.5),
-  lr          = c(1e-3),
-  epochs      = c(10L, 15L)
-) %>%
-  dplyr::mutate(candidate_id = dplyr::row_number()) %>%
-  dplyr::select(candidate_id, dplyr::everything())
-
-```
-
-
-
-## 2) Add helper functions
-
-Paste this as a new section after your current model-wrapper chunks.
-
-```{r}
-# -----------------------------------------------------------------------------
-# Neural text helpers
-# -----------------------------------------------------------------------------
-
-as_text_input <- function(text) {
-  matrix(as.character(text), ncol = 1)
-}
-
-prep_text_for_neural <- function(text_data, stop_list) {
-  toks <- quanteda::tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
-    quanteda::tokens_tolower() %>%
-    quanteda::tokens_remove(pattern = stop_list, valuetype = "fixed")
-
-  vapply(
-    seq_along(toks),
-    function(i) paste(as.character(toks[[i]]), collapse = " "),
-    FUN.VALUE = character(1)
-  )
-}
-
-build_tfidf_mlp_model <- function(train_text, cfg) {
-  text_in <- keras3::layer_input(shape = c(1), dtype = "string", name = "text")
-
-  vec <- keras3::layer_text_vectorization(
-    max_tokens   = as.integer(cfg$max_tokens),
-    standardize  = "lower_and_strip_punctuation",
-    split        = "whitespace",
-    output_mode  = "tf_idf",
-    sparse       = FALSE,
-    pad_to_max_tokens = TRUE
-  )
-  keras3::adapt(vec, as_text_input(train_text))
-
-  x <- vec(text_in) %>%
-    keras3::layer_dense(units = as.integer(cfg$hidden_units), activation = "relu") %>%
-    keras3::layer_dropout(rate = as.numeric(cfg$dropout)) %>%
-    keras3::layer_dense(units = 1)
-
-  model <- keras3::keras_model(text_in, x)
-  model %>% keras3::compile(
-    optimizer = keras3::optimizer_adam(learning_rate = as.numeric(cfg$lr)),
-    loss = keras3::loss_binary_crossentropy(from_logits = TRUE)
-  )
-  model
-}
-
-build_word_cnn_model <- function(train_text, cfg) {
-  text_in <- keras3::layer_input(shape = c(1), dtype = "string", name = "text")
-
-  vec <- keras3::layer_text_vectorization(
-    max_tokens             = as.integer(cfg$max_tokens),
-    standardize            = "lower_and_strip_punctuation",
-    split                  = "whitespace",
-    output_mode            = "int",
-    output_sequence_length = as.integer(cfg$seq_length)
-  )
-  keras3::adapt(vec, as_text_input(train_text))
-
-  x <- vec(text_in) %>%
-    keras3::layer_embedding(
-      input_dim  = as.integer(cfg$max_tokens + 2L),
-      output_dim = as.integer(cfg$embed_dim)
-    ) %>%
-    keras3::layer_conv_1d(
-      filters     = as.integer(cfg$filters),
-      kernel_size = as.integer(cfg$kernel_size),
-      activation  = "relu"
-    ) %>%
-    keras3::layer_global_max_pooling_1d() %>%
-    keras3::layer_dense(units = as.integer(cfg$dense_units), activation = "relu") %>%
-    keras3::layer_dropout(rate = as.numeric(cfg$dropout)) %>%
-    keras3::layer_dense(units = 1)
-
-  model <- keras3::keras_model(text_in, x)
-  model %>% keras3::compile(
-    optimizer = keras3::optimizer_adam(learning_rate = as.numeric(cfg$lr)),
-    loss = keras3::loss_binary_crossentropy(from_logits = TRUE)
-  )
-  model
-}
-
-fit_predict_keras_text_scores <- function(train_text, y_train, test_text,
-                                          build_fun, cfg, seed = 123) {
-  keras3::clear_session()
-  keras3::set_random_seed(as.integer(seed))
-
-  model <- build_fun(train_text, cfg)
-
-  model %>% keras3::fit(
-    x = as_text_input(train_text),
-    y = as.numeric(y_train == "christian"),
-    validation_split = keras_val_frac,
-    epochs = as.integer(cfg$epochs),
-    batch_size = as.integer(cfg$batch_size %||% keras_batch_size),
-    callbacks = list(
-      keras3::callback_early_stopping(
-        monitor = "val_loss",
-        patience = as.integer(keras_patience),
-        restore_best_weights = TRUE
-      )
-    ),
-    verbose = 0
-  )
-
-  out <- as.numeric(model %>% keras3::predict(as_text_input(test_text), verbose = 0))
-  keras3::clear_session()
-  out
-}
-
-cv_keras_text_scores_ckpt <- function(text, y, build_fun, cfg,
-                                      k = 5, seed = 123,
-                                      prefix = "", ckpt_dir,
-                                      model_tag = "keras_text") {
-  ensure_dir(ckpt_dir)
-  state_path <- file.path(ckpt_dir, "state.rds")
-  folds <- make_folds(y, k, seed)
-  state <- load_rds_or_null(state_path) %||%
-    list(scores = rep(NA_real_, length(y)),
-         done   = rep(FALSE, length(folds)))
-
-  for (j in seq_along(folds)) {
-    if (isTRUE(state$done[j])) next
-    log_progress(
-      paste0(model_tag, "_calibration_fold"),
-      paste(prefix, "fold", j, "of", length(folds))
-    )
-    va <- folds[[j]]
-    tr <- setdiff(seq_along(y), va)
-    state$scores[va] <- fit_predict_keras_text_scores(
-      train_text = text[tr],
-      y_train    = y[tr],
-      test_text  = text[va],
-      build_fun  = build_fun,
-      cfg        = cfg,
-      seed       = seed + j
-    )
-    state$done[j] <- TRUE
-    save_rds_atomic(state, state_path)
-  }
-
-  state$scores
-}
-
-tune_keras_text_model_ckpt <- function(text, y, grid, build_fun,
-                                       inner_k = 5, seed = 123,
-                                       prefix = "", ckpt_dir,
-                                       model_tag = "keras_text") {
-  ensure_dir(ckpt_dir)
-  folds <- make_folds(y, inner_k, seed)
-  summary_path <- file.path(ckpt_dir, "summary.rds")
-  summary_state <- load_rds_or_null(summary_path) %||%
-    list(done = rep(FALSE, nrow(grid)))
-
-  for (g in seq_len(nrow(grid))) {
-    if (isTRUE(summary_state$done[g])) next
-    cand_path <- file.path(ckpt_dir, sprintf("candidate_%03d.rds", g))
-    cand_state <- load_rds_or_null(cand_path) %||%
-      list(scores = rep(NA_real_, length(y)),
-           done   = rep(FALSE, length(folds)))
-    cfg <- as.list(grid[g, , drop = FALSE])
-
-    for (j in seq_along(folds)) {
-      if (isTRUE(cand_state$done[j])) next
-      log_progress(
-        paste0(model_tag, "_tuning_fold"),
-        paste(prefix, "candidate", g, "of", nrow(grid),
-              "fold", j, "of", length(folds))
-      )
-      va <- folds[[j]]
-      tr <- setdiff(seq_along(y), va)
-      cand_state$scores[va] <- fit_predict_keras_text_scores(
-        train_text = text[tr],
-        y_train    = y[tr],
-        test_text  = text[va],
-        build_fun  = build_fun,
-        cfg        = cfg,
-        seed       = seed + 1000L * g + j
-      )
-      cand_state$done[j] <- TRUE
-      save_rds_atomic(cand_state, cand_path)
-    }
-
-    summary_state$done[g] <- TRUE
-    save_rds_atomic(summary_state, summary_path)
-  }
-
-  tuning_rows <- lapply(seq_len(nrow(grid)), function(g) {
-    cs <- readRDS(file.path(ckpt_dir, sprintf("candidate_%03d.rds", g)))
-    bind_cols(
-      grid[g, , drop = FALSE],
-      tibble(
-        log_loss   = log_loss_safe(y, plogis(cs$scores)),
-        auc_margin = auc_margin_safe(y, cs$scores)
-      )
-    )
-  })
-
-  tuning <- bind_rows(tuning_rows) %>%
-    arrange(log_loss, desc(auc_margin))
-
-  list(best = tuning[1, , drop = FALSE], tuning = tuning)
-}
-```
-
-
-## 3) Extend `init_run_state()`
-
-Inside `init_run_state <- function(n_lab) { ... }`, add these fields.
-
-```{r}
-    tfidf_mlp_oof = rep(NA_real_, n_lab),
-    word_cnn_oof  = rep(NA_real_, n_lab),
-
-    tfidf_mlp_score_oof = rep(NA_real_, n_lab),
-    word_cnn_score_oof  = rep(NA_real_, n_lab),
-
-    tfidf_mlp_pred_youden_oof = rep(NA_character_, n_lab),
-    word_cnn_pred_youden_oof  = rep(NA_character_, n_lab),
-
-    tfidf_mlp_pred_f1_oof = rep(NA_character_, n_lab),
-    word_cnn_pred_f1_oof  = rep(NA_character_, n_lab),
-```
-
----
-
-## 4) Add neural-preprocessed text inside the outer loop
-
-Inside the outer loop, right after you create `x_tr` / `x_va`, add:
-
-```{r}
-  text_tr_neural <- prep_text_for_neural(lab$text[tr], latin_stops)
-  text_va_neural <- prep_text_for_neural(lab$text[va], latin_stops)
-```
-
-
-## 5) Add the TF-IDF MLP outer-fold block
-
-Paste this inside the outer loop after your LightGBM block.
-
-```r
-  # -- TF-IDF MLP ----------------------------------------------------------------------
-  if (isTRUE(run_tfidf_mlp)) {
-    key <- paste0("outer_", i, "_tfidf_mlp")
-    if (!is_done(state, key, "model_done")) {
-      model_dir <- file.path(outer_dir, "tfidf_mlp")
-
-      tfidf_tuned <- tune_keras_text_model_ckpt(
-        text = text_tr_neural,
-        y = y_tr,
-        grid = tfidf_mlp_grid,
-        build_fun = build_tfidf_mlp_model,
-        inner_k = k_folds_inner,
-        seed = 6000 + i,
-        prefix = paste("outer", i),
-        ckpt_dir = file.path(model_dir, "tuning"),
-        model_tag = "tfidf_mlp"
-      )
-
-      tfidf_cfg <- as.list(tfidf_tuned$best[1, , drop = FALSE])
-      tfidf_train_scores <- cv_keras_text_scores_ckpt(
-        text = text_tr_neural,
-        y = y_tr,
-        build_fun = build_tfidf_mlp_model,
-        cfg = tfidf_cfg,
-        k = k_folds_inner,
-        seed = 6100 + i,
-        prefix = paste("outer", i),
-        ckpt_dir = file.path(model_dir, "calibration"),
-        model_tag = "tfidf_mlp"
-      )
-
-      tfidf_platt <- fit_platt(tfidf_train_scores, y_tr)
-      tfidf_va_scores <- fit_predict_keras_text_scores(
-        train_text = text_tr_neural,
-        y_train = y_tr,
-        test_text = text_va_neural,
-        build_fun = build_tfidf_mlp_model,
-        cfg = tfidf_cfg,
-        seed = 6200 + i
-      )
-      tfidf_train_prob <- apply_platt(tfidf_platt, tfidf_train_scores)
-      tfidf_va_prob    <- apply_platt(tfidf_platt, tfidf_va_scores)
-      tfidf_th_y <- choose_threshold(y_tr, tfidf_train_prob, "youden")
-      tfidf_th_f <- choose_threshold(y_tr, tfidf_train_prob, "f1")
-
-      state$tfidf_mlp_oof[va]             <- tfidf_va_prob
-      state$tfidf_mlp_score_oof[va]       <- tfidf_va_scores
-      state$tfidf_mlp_pred_youden_oof[va] <- ifelse(tfidf_va_prob >= tfidf_th_y,
-                                                    "christian", "non_christian")
-      state$tfidf_mlp_pred_f1_oof[va]     <- ifelse(tfidf_va_prob >= tfidf_th_f,
-                                                    "christian", "non_christian")
-
-      threshold_row <- tibble(
-        outer_fold = i,
-        model = "tfidf_mlp",
-        threshold_youden = tfidf_th_y,
-        threshold_f1 = tfidf_th_f
-      )
-      metric_row <- summarize_model_fold(
-        y_va,
-        tfidf_va_prob,
-        state$tfidf_mlp_pred_youden_oof[va],
-        state$tfidf_mlp_pred_f1_oof[va],
-        "tfidf_mlp",
-        i
-      )
-      selected_row <- tfidf_tuned$best %>%
-        mutate(
-          outer_fold = i,
-          model = "tfidf_mlp",
-          threshold_youden = tfidf_th_y,
-          threshold_f1 = tfidf_th_f
-        )
-
-      state$outer_threshold_df <- upsert_rows(state$outer_threshold_df,
-                                              threshold_row,
-                                              c("outer_fold", "model"))
-      state$fold_metric_df <- upsert_rows(state$fold_metric_df,
-                                          metric_row,
-                                          c("outer_fold", "model"))
-      state$selected_outer_df <- upsert_rows(state$selected_outer_df,
-                                             selected_row,
-                                             c("outer_fold", "model"))
-      state <- mark_done(state, key, "model_done")
-      save_rds_atomic(state, state_path)
-    }
-  }
-```
-
----
-
-## 6) Add the word-CNN outer-fold block
-
-Paste this immediately after the TF-IDF MLP block.
-
-```r
-  # -- Word CNN ------------------------------------------------------------------------
-  if (isTRUE(run_word_cnn)) {
-    key <- paste0("outer_", i, "_word_cnn")
-    if (!is_done(state, key, "model_done")) {
-      model_dir <- file.path(outer_dir, "word_cnn")
-
-      cnn_tuned <- tune_keras_text_model_ckpt(
-        text = text_tr_neural,
-        y = y_tr,
-        grid = word_cnn_grid,
-        build_fun = build_word_cnn_model,
-        inner_k = k_folds_inner,
-        seed = 7000 + i,
-        prefix = paste("outer", i),
-        ckpt_dir = file.path(model_dir, "tuning"),
-        model_tag = "word_cnn"
-      )
-
-      cnn_cfg <- as.list(cnn_tuned$best[1, , drop = FALSE])
-      cnn_train_scores <- cv_keras_text_scores_ckpt(
-        text = text_tr_neural,
-        y = y_tr,
-        build_fun = build_word_cnn_model,
-        cfg = cnn_cfg,
-        k = k_folds_inner,
-        seed = 7100 + i,
-        prefix = paste("outer", i),
-        ckpt_dir = file.path(model_dir, "calibration"),
-        model_tag = "word_cnn"
-      )
-
-      cnn_platt <- fit_platt(cnn_train_scores, y_tr)
-      cnn_va_scores <- fit_predict_keras_text_scores(
-        train_text = text_tr_neural,
-        y_train = y_tr,
-        test_text = text_va_neural,
-        build_fun = build_word_cnn_model,
-        cfg = cnn_cfg,
-        seed = 7200 + i
-      )
-      cnn_train_prob <- apply_platt(cnn_platt, cnn_train_scores)
-      cnn_va_prob    <- apply_platt(cnn_platt, cnn_va_scores)
-      cnn_th_y <- choose_threshold(y_tr, cnn_train_prob, "youden")
-      cnn_th_f <- choose_threshold(y_tr, cnn_train_prob, "f1")
-
-      state$word_cnn_oof[va]             <- cnn_va_prob
-      state$word_cnn_score_oof[va]       <- cnn_va_scores
-      state$word_cnn_pred_youden_oof[va] <- ifelse(cnn_va_prob >= cnn_th_y,
-                                                   "christian", "non_christian")
-      state$word_cnn_pred_f1_oof[va]     <- ifelse(cnn_va_prob >= cnn_th_f,
-                                                   "christian", "non_christian")
-
-      threshold_row <- tibble(
-        outer_fold = i,
-        model = "word_cnn",
-        threshold_youden = cnn_th_y,
-        threshold_f1 = cnn_th_f
-      )
-      metric_row <- summarize_model_fold(
-        y_va,
-        cnn_va_prob,
-        state$word_cnn_pred_youden_oof[va],
-        state$word_cnn_pred_f1_oof[va],
-        "word_cnn",
-        i
-      )
-      selected_row <- cnn_tuned$best %>%
-        mutate(
-          outer_fold = i,
-          model = "word_cnn",
-          threshold_youden = cnn_th_y,
-          threshold_f1 = cnn_th_f
-        )
-
-      state$outer_threshold_df <- upsert_rows(state$outer_threshold_df,
-                                              threshold_row,
-                                              c("outer_fold", "model"))
-      state$fold_metric_df <- upsert_rows(state$fold_metric_df,
-                                          metric_row,
-                                          c("outer_fold", "model"))
-      state$selected_outer_df <- upsert_rows(state$selected_outer_df,
-                                             selected_row,
-                                             c("outer_fold", "model"))
-      state <- mark_done(state, key, "model_done")
-      save_rds_atomic(state, state_path)
-    }
-  }
-```
-
----
-
-## 7) Add neural text for the full-data section
-
-Inside `full-fits`, right after `x_all_full`, add:
-
-```r
-text_lab_neural_full <- prep_text_for_neural(lab$text, latin_stops)
-text_all_neural_full <- prep_text_for_neural(out$text, latin_stops)
-```
-
----
-
-## 8) Add full-data TF-IDF MLP fit
-
-Paste this after your LightGBM full fit.
-
-```r
-# -- TF-IDF MLP ----------------------------------------------------------------------
-if (isTRUE(run_tfidf_mlp)) {
-  tfidf_tuned_full <- tune_keras_text_model_ckpt(
-    text = text_lab_neural_full,
-    y = lab$manual_label,
-    grid = tfidf_mlp_grid,
-    build_fun = build_tfidf_mlp_model,
-    inner_k = k_folds_inner,
-    seed = 9001,
-    prefix = "full",
-    ckpt_dir = file.path(full_dir, "tfidf_mlp", "tuning"),
-    model_tag = "tfidf_mlp"
-  )
-  tfidf_cfg_full <- as.list(tfidf_tuned_full$best[1, , drop = FALSE])
-  tfidf_cv_scores <- cv_keras_text_scores_ckpt(
-    text = text_lab_neural_full,
-    y = lab$manual_label,
-    build_fun = build_tfidf_mlp_model,
-    cfg = tfidf_cfg_full,
-    k = k_folds_inner,
-    seed = 9101,
-    prefix = "full",
-    ckpt_dir = file.path(full_dir, "tfidf_mlp", "calibration"),
-    model_tag = "tfidf_mlp"
-  )
-  tfidf_platt_full <- fit_platt(tfidf_cv_scores, lab$manual_label)
-  tfidf_lab_prob_cf <- apply_platt(tfidf_platt_full, tfidf_cv_scores)
-  tfidf_all_scores <- fit_predict_keras_text_scores(
-    train_text = text_lab_neural_full,
-    y_train = lab$manual_label,
-    test_text = text_all_neural_full,
-    build_fun = build_tfidf_mlp_model,
-    cfg = tfidf_cfg_full,
-    seed = 9201
-  )
-  tfidf_all_prob <- apply_platt(tfidf_platt_full, tfidf_all_scores)
-  tfidf_deploy_th_y <- choose_threshold(lab$manual_label, tfidf_lab_prob_cf, "youden")
-  tfidf_deploy_th_f <- choose_threshold(lab$manual_label, tfidf_lab_prob_cf, "f1")
-}
-```
-
----
-
-## 9) Add full-data word-CNN fit
-
-Paste this after the TF-IDF MLP full-fit block.
-
-```r
-# -- Word CNN ------------------------------------------------------------------------
-if (isTRUE(run_word_cnn)) {
-  cnn_tuned_full <- tune_keras_text_model_ckpt(
-    text = text_lab_neural_full,
-    y = lab$manual_label,
-    grid = word_cnn_grid,
-    build_fun = build_word_cnn_model,
-    inner_k = k_folds_inner,
-    seed = 9002,
-    prefix = "full",
-    ckpt_dir = file.path(full_dir, "word_cnn", "tuning"),
-    model_tag = "word_cnn"
-  )
-  cnn_cfg_full <- as.list(cnn_tuned_full$best[1, , drop = FALSE])
-  cnn_cv_scores <- cv_keras_text_scores_ckpt(
-    text = text_lab_neural_full,
-    y = lab$manual_label,
-    build_fun = build_word_cnn_model,
-    cfg = cnn_cfg_full,
-    k = k_folds_inner,
-    seed = 9102,
-    prefix = "full",
-    ckpt_dir = file.path(full_dir, "word_cnn", "calibration"),
-    model_tag = "word_cnn"
-  )
-  cnn_platt_full <- fit_platt(cnn_cv_scores, lab$manual_label)
-  cnn_lab_prob_cf <- apply_platt(cnn_platt_full, cnn_cv_scores)
-  cnn_all_scores <- fit_predict_keras_text_scores(
-    train_text = text_lab_neural_full,
-    y_train = lab$manual_label,
-    test_text = text_all_neural_full,
-    build_fun = build_word_cnn_model,
-    cfg = cnn_cfg_full,
-    seed = 9202
-  )
-  cnn_all_prob <- apply_platt(cnn_platt_full, cnn_all_scores)
-  cnn_deploy_th_y <- choose_threshold(lab$manual_label, cnn_lab_prob_cf, "youden")
-  cnn_deploy_th_f <- choose_threshold(lab$manual_label, cnn_lab_prob_cf, "f1")
-}
-```
-
----
-
-## 10) Extend `deployment_thresholds`
-
-Add these rows to the `deployment_thresholds <- tibble(...)` block.
-
-```r
-  model = c("naive_bayes", "elastic_net", "svm_platt", "xgboost", "lightgbm",
-            if (isTRUE(run_tfidf_mlp)) "tfidf_mlp",
-            if (isTRUE(run_word_cnn))  "word_cnn"),
-  threshold_youden = c(nb_deploy_th_y, enet_deploy_th_y, svm_deploy_th_y,
-                       xgb_deploy_th_y, lgb_deploy_th_y,
-                       if (isTRUE(run_tfidf_mlp)) tfidf_deploy_th_y,
-                       if (isTRUE(run_word_cnn))  cnn_deploy_th_y),
-  threshold_f1 = c(nb_deploy_th_f, enet_deploy_th_f, svm_deploy_th_f,
-                   xgb_deploy_th_f, lgb_deploy_th_f,
-                   if (isTRUE(run_tfidf_mlp)) tfidf_deploy_th_f,
-                   if (isTRUE(run_word_cnn))  cnn_deploy_th_f),
-```
-
-If you want to avoid messing with the existing vectorized construction, it is cleaner to just rebuild `deployment_thresholds` like this:
-
-```r
-deployment_thresholds <- bind_rows(
-  tibble(model = "naive_bayes", threshold_youden = nb_deploy_th_y, threshold_f1 = nb_deploy_th_f),
-  tibble(model = "elastic_net", threshold_youden = enet_deploy_th_y, threshold_f1 = enet_deploy_th_f),
-  tibble(model = "svm_platt", threshold_youden = svm_deploy_th_y, threshold_f1 = svm_deploy_th_f),
-  tibble(model = "xgboost", threshold_youden = xgb_deploy_th_y, threshold_f1 = xgb_deploy_th_f),
-  tibble(model = "lightgbm", threshold_youden = lgb_deploy_th_y, threshold_f1 = lgb_deploy_th_f),
-  if (isTRUE(run_tfidf_mlp)) tibble(model = "tfidf_mlp", threshold_youden = tfidf_deploy_th_y, threshold_f1 = tfidf_deploy_th_f),
-  if (isTRUE(run_word_cnn)) tibble(model = "word_cnn", threshold_youden = cnn_deploy_th_y, threshold_f1 = cnn_deploy_th_f)
-) %>%
-  mutate(threshold_scope = "full_labeled_cross_fitted_calibrated")
-```
-
----
-
-## 11) Extend the assembled per-document predictions
-
-Inside `assemble-predictions`, add these objects before `out <- out %>% mutate(...)`:
-
-```r
-if (isTRUE(run_tfidf_mlp)) {
-  prob_tfidf_mlp  <- tfidf_all_prob
-  score_tfidf_mlp <- tfidf_all_scores
-  prob_tfidf_mlp[lab_pos] <- tfidf_lab_prob_cf
-}
-
-if (isTRUE(run_word_cnn)) {
-  prob_word_cnn  <- cnn_all_prob
-  score_word_cnn <- cnn_all_scores
-  prob_word_cnn[lab_pos] <- cnn_lab_prob_cf
-}
-```
-
-Then add these fields inside the `mutate(...)` call:
-
-```r
-    prob_tfidf_mlp = if (isTRUE(run_tfidf_mlp)) safe_prob(prob_tfidf_mlp) else NA_real_,
-    score_tfidf_mlp_logit = if (isTRUE(run_tfidf_mlp)) score_tfidf_mlp else NA_real_,
-    label_tfidf_mlp_youden = if (isTRUE(run_tfidf_mlp)) if_else(
-      prob_tfidf_mlp >= get_threshold("tfidf_mlp", "youden"),
-      "christian", "non_christian"
-    ) else NA_character_,
-    label_tfidf_mlp_f1 = if (isTRUE(run_tfidf_mlp)) if_else(
-      prob_tfidf_mlp >= get_threshold("tfidf_mlp", "f1"),
-      "christian", "non_christian"
-    ) else NA_character_,
-
-    prob_word_cnn = if (isTRUE(run_word_cnn)) safe_prob(prob_word_cnn) else NA_real_,
-    score_word_cnn_logit = if (isTRUE(run_word_cnn)) score_word_cnn else NA_real_,
-    label_word_cnn_youden = if (isTRUE(run_word_cnn)) if_else(
-      prob_word_cnn >= get_threshold("word_cnn", "youden"),
-      "christian", "non_christian"
-    ) else NA_character_,
-    label_word_cnn_f1 = if (isTRUE(run_word_cnn)) if_else(
-      prob_word_cnn >= get_threshold("word_cnn", "f1"),
-      "christian", "non_christian"
-    ) else NA_character_,
-```
-
----
-
-## 12) Extend the OOF metrics block
-
-In `model_metrics_oof <- bind_rows(...)`, add:
-
-```r
-  if (isTRUE(run_tfidf_mlp)) summarize_model_oof(
-    lab$manual_label,
-    state$tfidf_mlp_oof,
-    state$tfidf_mlp_pred_youden_oof,
-    state$tfidf_mlp_pred_f1_oof,
-    "tfidf_mlp"
-  ),
-  if (isTRUE(run_word_cnn)) summarize_model_oof(
-    lab$manual_label,
-    state$word_cnn_oof,
-    state$word_cnn_pred_youden_oof,
-    state$word_cnn_pred_f1_oof,
-    "word_cnn"
-  )
-```
-
-In `oof_eval_predictions <- tibble(...)`, add:
-
-```r
-  prob_tfidf_mlp = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_oof else NA_real_,
-  score_tfidf_mlp_logit = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_score_oof else NA_real_,
-  label_tfidf_mlp_youden = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_pred_youden_oof else NA_character_,
-  label_tfidf_mlp_f1 = if (isTRUE(run_tfidf_mlp)) state$tfidf_mlp_pred_f1_oof else NA_character_,
-
-  prob_word_cnn = if (isTRUE(run_word_cnn)) state$word_cnn_oof else NA_real_,
-  score_word_cnn_logit = if (isTRUE(run_word_cnn)) state$word_cnn_score_oof else NA_real_,
-  label_word_cnn_youden = if (isTRUE(run_word_cnn)) state$word_cnn_pred_youden_oof else NA_character_,
-  label_word_cnn_f1 = if (isTRUE(run_word_cnn)) state$word_cnn_pred_f1_oof else NA_character_,
-```
-
-In `selected_full <- bind_rows(...)`, add:
-
-```r
-  if (isTRUE(run_tfidf_mlp)) tfidf_tuned_full$best %>% mutate(model = "tfidf_mlp"),
-  if (isTRUE(run_word_cnn)) cnn_tuned_full$best %>% mutate(model = "word_cnn")
-```
-
----
-
-## 13) One-time install block if keras is not set up yet
-
-Run this once outside the pipeline, not every time.
-
-```r
-install.packages("keras3")
-keras3::install_keras(backend = "tensorflow")
-```
-
----
-
-## 14) What I would actually run first
-
-Start with this:
-
-```r
-run_tfidf_mlp <- TRUE
-run_word_cnn  <- FALSE
-```
-
-Once that works end-to-end and your checkpointing is behaving, turn on `word_cnn`.
-
-If you try both at once before the first one runs cleanly, debugging will be annoying.
-
-
-```
-
-
-

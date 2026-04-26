@@ -1,0 +1,27 @@
+outcome,score,model,elpd_loo,elpd_loo_se,p_loo,looic,delta_looic,delta_elpd,rank,outcome_label,score_label,model_label,model_plot_label
+n_chars,score_lgb_logit_aligned,source_creator_date_type_score,-843.902737806515,23.35061429842954,192.00972959537805,1687.80547561303,0,0,1,Document length (characters),LightGBM,Prediction source + date + text type + score + creator RE,"Prediction source + date +
+text type + score + creator RE"
+n_chars,score_nb_logit_aligned,creator_sdate_type_score,-834.625607338108,24.18059585920511,184.63599263225697,1669.251214676216,0,0,1,Document length (characters),Naive Bayes,Smooth date + text type + score + creator RE,"Smooth date + text type +
+score + creator RE"
+n_chars,score_ridge_logit_aligned,source_creator_sdate_type_score,-803.674499490718,23.57602589259014,200.41823034642147,1607.348998981436,0,0,1,Document length (characters),Ridge,Prediction source + smooth date + text type + score + creator RE,"Prediction source + smooth
+date + text type + score +
+creator RE"
+n_chars,score_svm_logit_aligned,creator_sdate_type_score,-821.9134693970402,24.83128710708061,198.9120010003739,1643.8269387940804,0,0,1,Document length (characters),SVM,Smooth date + text type + score + creator RE,"Smooth date + text type +
+score + creator RE"
+n_chars,score_xgb_logit_aligned,source_creator_sdate_type_score,-861.070358209597,23.618423469214424,192.9733192619814,1722.140716419194,0,0,1,Document length (characters),XGBoost,Prediction source + smooth date + text type + score + creator RE,"Prediction source + smooth
+date + text type + score +
+creator RE"
+n_words,score_lgb_logit_aligned,source_creator_sdate_type_score,-842.0899495694997,23.556710744208875,191.34348298772557,1684.1798991389994,0,0,1,Document length (words),LightGBM,Prediction source + smooth date + text type + score + creator RE,"Prediction source + smooth
+date + text type + score +
+creator RE"
+n_words,score_nb_logit_aligned,source_creator_sdate_type_score,-834.8930355017567,23.84250101780816,183.33739562131484,1669.7860710035134,0,0,1,Document length (words),Naive Bayes,Prediction source + smooth date + text type + score + creator RE,"Prediction source + smooth
+date + text type + score +
+creator RE"
+n_words,score_ridge_logit_aligned,creator_sdate_type_score,-801.1260085296849,23.688195160213983,198.15827370422974,1602.2520170593698,0,0,1,Document length (words),Ridge,Smooth date + text type + score + creator RE,"Smooth date + text type +
+score + creator RE"
+n_words,score_svm_logit_aligned,source_creator_sdate_type_score,-821.2960544651846,24.42887789672171,198.47219799065536,1642.5921089303692,0,0,1,Document length (words),SVM,Prediction source + smooth date + text type + score + creator RE,"Prediction source + smooth
+date + text type + score +
+creator RE"
+n_words,score_xgb_logit_aligned,source_creator_sdate_type_score,-861.5871116944954,23.614666912642573,192.12198315824824,1723.1742233889909,0,0,1,Document length (words),XGBoost,Prediction source + smooth date + text type + score + creator RE,"Prediction source + smooth
+date + text type + score +
+creator RE"

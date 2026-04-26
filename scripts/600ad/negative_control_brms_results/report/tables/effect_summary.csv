@@ -1,0 +1,11 @@
+outcome_label,score_label,mean_estimate,median_estimate,n_models,strong_support
+Document length (characters),LightGBM,0.28345948767444445,0.2690771268,9,1
+Document length (characters),Naive Bayes,-0.3058940477025,-0.3048037755,9,0
+Document length (characters),Ridge,0.39017784911888886,0.375235391105,9,1
+Document length (characters),SVM,0.3362870617561111,0.29814928508,9,1
+Document length (characters),XGBoost,0.18810795847122222,0.194511784201,9,1
+Document length (words),LightGBM,0.28287681598,0.26817686734,9,1
+Document length (words),Naive Bayes,-0.3058672169962222,-0.30397431231,9,0
+Document length (words),Ridge,0.39106914117388886,0.373776188445,9,1
+Document length (words),SVM,0.33714977693055553,0.29629855583,9,1
+Document length (words),XGBoost,0.18747589029533332,0.192035066619,9,1

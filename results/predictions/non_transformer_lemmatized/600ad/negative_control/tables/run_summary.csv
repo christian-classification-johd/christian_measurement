@@ -1,0 +1,11 @@
+outcome,score,n,n_models_attempted,n_models_fit_ok,n_models_loo_ok,score_sd_raw,outcome_sd_raw,backend,adapt_delta,max_treedepth
+n_words,score_nb_logit_aligned,780,18,18,18,27.10433416234271,34968.69137823052,cmdstanr,0.99,12
+n_words,score_ridge_logit_aligned,780,18,18,18,2.010339157415783,34968.69137823052,cmdstanr,0.99,12
+n_words,score_svm_logit_aligned,780,18,18,18,4.452305590492066,34968.69137823052,cmdstanr,0.99,12
+n_words,score_xgb_logit_aligned,780,18,18,18,3.2578145694666185,34968.69137823052,cmdstanr,0.99,12
+n_words,score_lgb_logit_aligned,780,18,18,18,2.9422198118733056,34968.69137823052,cmdstanr,0.99,12
+n_chars,score_nb_logit_aligned,780,18,18,18,27.10433416234271,221316.37872322657,cmdstanr,0.99,12
+n_chars,score_ridge_logit_aligned,780,18,18,18,2.010339157415783,221316.37872322657,cmdstanr,0.99,12
+n_chars,score_svm_logit_aligned,780,18,18,18,4.452305590492066,221316.37872322657,cmdstanr,0.99,12
+n_chars,score_xgb_logit_aligned,780,18,18,18,3.2578145694666185,221316.37872322657,cmdstanr,0.99,12
+n_chars,score_lgb_logit_aligned,780,18,18,18,2.9422198118733056,221316.37872322657,cmdstanr,0.99,12

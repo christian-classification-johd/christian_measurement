@@ -1,0 +1,30 @@
+Model,Metric,Actual,Permutation median,Permutation 95% interval,Empirical p,Standardized effect
+Elastic net,AUC,0.972,0.488,"[0.406, 0.586]",0.010,10.24
+LightGBM,AUC,0.964,0.498,"[0.432, 0.593]",0.010,10.97
+Naive Bayes,AUC,0.950,0.505,"[0.425, 0.563]",0.010,11.72
+SVM + Platt,AUC,0.981,0.488,"[0.440, 0.606]",0.010,11.11
+XGBoost,AUC,0.959,0.499,"[0.410, 0.605]",0.010,9.85
+Elastic net,Average precision,0.946,0.213,"[0.174, 0.278]",0.010,27.10
+LightGBM,Average precision,0.898,0.214,"[0.184, 0.271]",0.010,27.42
+Naive Bayes,Average precision,0.893,0.220,"[0.181, 0.267]",0.010,29.47
+SVM + Platt,Average precision,0.960,0.208,"[0.188, 0.295]",0.010,27.11
+XGBoost,Average precision,0.899,0.214,"[0.174, 0.280]",0.010,26.89
+Elastic net,Brier score,0.035,0.167,"[0.164, 0.171]",0.010,-81.46
+LightGBM,Brier score,0.039,0.167,"[0.164, 0.170]",0.010,-91.08
+Naive Bayes,Brier score,0.038,0.166,"[0.165, 0.169]",0.010,-117.97
+SVM + Platt,Brier score,0.031,0.166,"[0.165, 0.170]",0.010,-90.17
+XGBoost,Brier score,0.043,0.167,"[0.163, 0.170]",0.010,-73.60
+Elastic net,Log loss,0.149,0.516,"[0.509, 0.530]",0.010,-72.78
+LightGBM,Log loss,0.163,0.517,"[0.509, 0.526]",0.010,-83.68
+Naive Bayes,Log loss,0.177,0.515,"[0.510, 0.523]",0.010,-102.51
+SVM + Platt,Log loss,0.124,0.516,"[0.510, 0.526]",0.010,-85.32
+XGBoost,Log loss,0.171,0.517,"[0.505, 0.528]",0.010,-67.72
+Elastic net,MCC,0.872,-0.027,"[-0.038, 0.102]",0.100,14.36
+LightGBM,MCC,0.838,-0.027,"[-0.046, -0.027]",0.250,75.51
+SVM + Platt,MCC,0.882,-0.027,"[-0.038, 0.096]",0.250,11.10
+XGBoost,MCC,0.846,-0.027,"[-0.037, -0.027]",0.143,189.85
+Elastic net,Mean probability separation,0.787,-0.001,"[-0.012, 0.011]",0.010,156.97
+LightGBM,Mean probability separation,0.765,-0.001,"[-0.008, 0.012]",0.010,159.12
+Naive Bayes,Mean probability separation,0.731,0.001,"[-0.007, 0.009]",0.010,188.34
+SVM + Platt,Mean probability separation,0.824,-0.001,"[-0.007, 0.010]",0.010,159.44
+XGBoost,Mean probability separation,0.755,0.000,"[-0.010, 0.016]",0.010,131.38

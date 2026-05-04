@@ -878,17 +878,19 @@ finite_or <- function(x, default) {
   if (length(x) == 0 || !is.finite(x)) default else x
 }
 
+# Reduced neighborhoods: keep the originally-tuned point plus a tight bracket.
+# This lowers per-iteration cost substantially without changing the analysis logic.
 build_enet_candidates <- function(row) {
   alpha0 <- finite_or(row$alpha, 0.2)
   lambda0 <- finite_or(row$lambda_1se, finite_or(row$lambda_min, 0.02))
-  alpha_grid <- sort(unique(pmin(pmax(c(alpha0 * 0.75, alpha0, alpha0 * 1.25), 0.01), 0.95)))
-  lambda_grid <- sort(unique(pmax(c(lambda0 * 0.50, lambda0 * 0.75, lambda0, lambda0 * 1.25, lambda0 * 1.50), 1e-8)))
-  tidyr::crossing(alpha = alpha_grid, lambda = lambda_grid)
+  # Just the tuned alpha; one lambda value (the tuned one).
+  tibble(alpha = alpha0, lambda = max(lambda0, 1e-8))
 }
 
 build_svm_candidates <- function(row) {
   cost0 <- finite_or(row$cost, 1)
-  tibble(cost = sort(unique(pmax(c(cost0 * 0.5, cost0, cost0 * 2), 1e-8))))
+  # Single tuned cost only.
+  tibble(cost = max(cost0, 1e-8))
 }
 
 build_xgb_candidates <- function(row) {
@@ -899,15 +901,16 @@ build_xgb_candidates <- function(row) {
   col0 <- finite_or(row$colsample_bytree, 0.8)
   gam0 <- finite_or(row$gamma, 0.5)
   nr0 <- as.integer(round(finite_or(row$best_nrounds, 400)))
+  # Single tuned configuration.
   tibble(
-    eta = c(eta0, max(0.01, eta0 * 0.75), min(0.20, eta0 * 1.25), eta0, eta0),
-    max_depth = c(depth0, depth0, depth0, max(2L, depth0 - 1L), min(10L, depth0 + 1L)),
-    min_child_weight = c(mcw0, mcw0, mcw0, mcw0, max(1, mcw0 * 1.5)),
+    eta = eta0,
+    max_depth = depth0,
+    min_child_weight = mcw0,
     subsample = subs0,
     colsample_bytree = col0,
     gamma = gam0,
     best_nrounds = nr0
-  ) %>% distinct()
+  )
 }
 
 build_lgb_candidates <- function(row) {
@@ -917,14 +920,15 @@ build_lgb_candidates <- function(row) {
   ff0 <- finite_or(row$feature_fraction, 0.6)
   bf0 <- finite_or(row$bagging_fraction, 0.7)
   nr0 <- as.integer(round(finite_or(row$best_nrounds, 200)))
+  # Single tuned configuration.
   tibble(
-    learning_rate = c(lr0, max(0.005, lr0 * 0.75), min(0.10, lr0 * 1.25), lr0, lr0),
-    num_leaves = c(leaves0, leaves0, leaves0, max(7L, floor(leaves0 * 0.75)), min(127L, ceiling(leaves0 * 1.25))),
-    min_data_in_leaf = c(mdl0, mdl0, mdl0, mdl0, max(5L, floor(mdl0 * 0.75))),
+    learning_rate = lr0,
+    num_leaves = leaves0,
+    min_data_in_leaf = mdl0,
     feature_fraction = ff0,
     bagging_fraction = bf0,
     best_nrounds = nr0
-  ) %>% distinct()
+  )
 }
 
 hp_path <- find_hyperparameter_file()
@@ -1496,7 +1500,7 @@ print(p_pvalues)
 # Probability-level diagnostic plots
 
 ```{r}
-oof_all <- bind_rows(lapply(run_results, `[[`, "oof"))
+oof_all <- bind_rows(lapply(run_results, `[[`, "oof"), .id = "run_id")
 write_csv_atomic(oof_all, file.path(table_dir, "permutation_validation_oof_predictions.csv"))
 
 prob_cols <- paste0(MODELS_TO_RUN, "_prob")

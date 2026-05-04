@@ -235,7 +235,7 @@ outer_fold,held_out_author,model,n,n_christian,n_non_christian,auc,log_loss,brie
 47,cornelius_seuerus,xgboost,1,0,1,NA,0.03342427136810281,0.00108055867035795,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 47,cornelius_seuerus,lightgbm,1,0,1,NA,0.02161259805034313,4.571351602543721e-4,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 48,cyprianus_carthaginensis,naive_bayes,1,1,0,NA,0.1413744391228602,0.01738068443778746,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
-48,cyprianus_carthaginensis,enet,1,1,0,NA,2.503654676176108e-5,6.268129803576446e-10,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
+48,cyprianus_carthaginensis,enet,1,1,0,NA,2.503654676176108e-5,6.268129803576445e-10,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 48,cyprianus_carthaginensis,svm_platt,1,1,0,NA,3.118651666932952e-7,9.725985186467296e-14,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 48,cyprianus_carthaginensis,xgboost,1,1,0,NA,0.00355453620282569,1.2589909999985016e-5,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 48,cyprianus_carthaginensis,lightgbm,1,1,0,NA,0.00834878555556422,6.912311531819656e-5,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
@@ -551,7 +551,7 @@ outer_fold,held_out_author,model,n,n_christian,n_non_christian,auc,log_loss,brie
 110,obsequens_iulius,lightgbm,1,0,1,NA,0.0072351077124963,5.196964249122375e-5,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 111,orientius,naive_bayes,1,1,0,NA,0.14629898453456283,0.01852338093752929,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 111,orientius,enet,1,1,0,NA,0.00519625020055409,2.686113644780461e-5,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
-111,orientius,svm_platt,1,1,0,NA,2.715105442250031e-4,7.369796358733896e-8,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
+111,orientius,svm_platt,1,1,0,NA,2.715105442250031e-4,7.369796358733897e-8,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 111,orientius,xgboost,1,1,0,NA,0.01480160762225681,2.158725626057291e-4,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 111,orientius,lightgbm,1,1,0,NA,0.03496035091316235,0.00118035518549666,1,1,1,1,NA,1,NA,1,1,1,1,NA,1,NA
 112,ovidius_naso_publius,naive_bayes,9,0,9,NA,0.02802071054200709,0.00279453743965558,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
@@ -766,7 +766,7 @@ outer_fold,held_out_author,model,n,n_christian,n_non_christian,auc,log_loss,brie
 153,seneca_lucius_annaeus,lightgbm,9,0,9,NA,0.02407529058723354,9.644823442937095e-4,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 154,sentius_augurinus,naive_bayes,1,0,1,NA,0.01324750236675609,1.7318929557661765e-4,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 154,sentius_augurinus,enet,1,0,1,NA,0.00919923823572439,8.385165068563975e-5,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
-154,sentius_augurinus,svm_platt,1,0,1,NA,3.14515385257341e-4,9.888882143169467e-8,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
+154,sentius_augurinus,svm_platt,1,0,1,NA,3.14515385257341e-4,9.888882143169469e-8,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 154,sentius_augurinus,xgboost,1,0,1,NA,0.01176068221306005,1.3669808681294896e-4,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 154,sentius_augurinus,lightgbm,1,0,1,NA,0.00467074369473925,2.171422750537301e-5,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA
 155,septimius_serenus,naive_bayes,1,0,1,NA,0.07697339057143213,0.00548866259426838,1,1,NA,NA,1,NA,NA,1,1,NA,NA,1,NA,NA

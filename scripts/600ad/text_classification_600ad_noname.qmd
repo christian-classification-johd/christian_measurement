@@ -190,52 +190,7 @@ corpus_artifacts <- c(
 )
 
 
-proper_nouns_christian <- c(
-  # Divinity & core figures
-  "christus", "iesus", "jesus", "messias",
-  # Apostles & evangelists
-  "paulus", "petrus", "iohannes", "johannes", "matthaeus", "marcus", "lucas",
-  "andreas", "iacobus", "jacobus", "thomas", "philippus", "bartholomaeus",
-  "simon", "thaddaeus", "matthias", "barnabas",
-  # Old Testament figures
-  "moyses", "moses", "abraham", "isaac", "iacob", "jacob", "david", "salomon",
-  "isaias", "hieremias", "ezechiel", "daniel", "noe", "adam", "eva",
-  # Marian / Holy Family
-  "maria",  "joseph", "ioseph",
-  # Patristic & early-medieval Christian authors frequently cited or named
-  "augustinus", "hieronymus", "ambrosius", "gregorius", "benedictus",
-  "cassiodorus", "boethius", "cyprianus",
-  "tertullianus", "origenes", "athanasius", "basilius", "chrysostomus",
-  "leo", "hilarius", "martinus",
-  # Saints, martyrs, popes commonly named
-  "stephanus", "laurentius", "vincentius", "agnes", "caecilia", "agatha",
-  "sebastianus", "georgius", "nicolaus", "silvester", "perpetua", "felicitas",
-  # Liturgical / cult markers (not ordinary theological vocabulary)
-  "amen", "alleluia", "halleluia", "kyrie", "eleison",
-  # Places with strong Christian association in this period
-  "ierusalem", "jerusalem", "bethleem", "nazareth", "galilea",
-  "roma", "constantinopolis", "antiochia"
-)
-
-proper_nouns_non_christian <- c(
-  # Roman / pagan deities
-  "iuppiter", "jupiter", "iovis", "juno", "iuno", "minerva", "mars", "martis",
-  "venus", "veneris", "mercurius", "apollo", "apollinis", "diana", "neptunus",
-  "vulcanus", "ceres", "bacchus", "saturnus", "pluto", "vesta", "ianus", "janus",
-  "hercules",
-  # Greek deities / mythological figures that recur
-  "zeus", "hera", "athena", "hermes", "aphrodite", "poseidon",
-  "achilles", "ulixes", "ulysses", "aeneas", "hector", "priamus",
-  # Divine epithets
-  "phoebus", "lyaeus", "gradivus",
-  # Roman emperors / generals / statesmen (pre-Christian and the few anachronistic)
-  "augustus", "caesar", "nero", "traianus", "hadrianus", "marcus",
-  "cicero", "tullius", "pompeius", "crassus", "brutus", "antonius",
-  "fridericus", "heinricus", "henricus", "conradus", "otto", "ottonis",
-  "carolus",
-  # Classical authors frequently named
-  "vergilius", "virgilius", "horatius", "ovidius", "livius", "tacitus",
-  "sallustius", "lucretius", "plinius", "seneca"
+proper_nouns_christian <- c("christus", "christianus"
 )
 
 
@@ -244,7 +199,6 @@ latin_stops <- sort(unique(tolower(c(
   stops_v2,
   corpus_artifacts,
   proper_nouns_christian,
-  proper_nouns_non_christian
 ))))
 latin_stops <- latin_stops[latin_stops != "*" & nzchar(latin_stops)]
 

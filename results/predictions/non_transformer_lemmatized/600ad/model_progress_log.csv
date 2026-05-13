@@ -26922,3 +26922,90 @@ time,step,detail
 2026-04-18 07:09:37,lgb_calibration_fold,full fold 5 of 5
 2026-04-18 07:09:45,full_fits_done,all deployment models trained
 2026-04-18 07:09:47,done,pipeline complete
+2026-05-05 22:11:08,prediction_only,loading saved artifacts and scoring the new lemmatized corpus
+2026-05-05 22:11:08,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 22:29:23,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-05 22:29:23,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 22:29:29,vectorizer,fitting full-corpus vectorizer
+2026-05-05 22:30:44,fit_nb_full,naive bayes
+2026-05-05 22:30:45,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-05 22:30:46,fit_svm_full,cost 16
+2026-05-05 22:30:47,fit_xgb_full,nrounds 4000
+2026-05-05 22:31:56,fit_lgb_full,nrounds 168
+2026-05-05 22:32:03,saved_scores,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_model_scores.csv
+2026-05-05 22:32:03,saved_skipped_rows,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_rows_skipped_missing_text_lemma.csv
+2026-05-05 22:32:03,saved_params,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/prediction_only_hyperparameters_used.csv
+2026-05-05 22:32:03,done,rows total 1906 | rows scored 1899 | rows skipped 7
+2026-05-05 22:41:55,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-05 22:41:55,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 22:42:00,vectorizer,fitting full-corpus vectorizer
+2026-05-05 22:45:08,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-05 22:45:08,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 22:45:13,vectorizer,fitting full-corpus vectorizer
+2026-05-05 22:46:34,fit_nb_full,naive bayes
+2026-05-05 22:46:35,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-05 22:46:35,fit_svm_full,cost 16
+2026-05-05 22:46:36,fit_xgb_full,nrounds 4000
+2026-05-05 22:47:49,fit_lgb_full,nrounds 168
+2026-05-05 22:47:56,saved_scores,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_model_scores.csv
+2026-05-05 22:47:56,saved_skipped_rows,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_rows_skipped_missing_text_lemma.csv
+2026-05-05 22:47:56,saved_params,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/prediction_only_hyperparameters_used.csv
+2026-05-05 22:47:56,done,rows total: 1906 | rows scored: 1899 | rows skipped: 7
+2026-05-05 23:23:01,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-05 23:23:02,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 23:23:09,vectorizer,fitting full-corpus vectorizer
+2026-05-05 23:25:19,fit_nb_full,naive bayes
+2026-05-05 23:25:19,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-05 23:25:20,fit_svm_full,cost 16
+2026-05-05 23:25:22,fit_xgb_full,nrounds 4000
+2026-05-05 23:27:33,fit_lgb_full,nrounds 168
+2026-05-05 23:27:41,saved_scores,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_model_scores.csv
+2026-05-05 23:27:41,saved_skipped_rows,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_rows_skipped_missing_text_lemma.csv
+2026-05-05 23:27:41,saved_params,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/prediction_only_hyperparameters_used.csv
+2026-05-05 23:27:42,done,rows total: 1906 | rows scored: 1899 | rows skipped: 7
+2026-05-05 23:33:52,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-05 23:33:52,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 23:33:59,vectorizer,fitting full-corpus vectorizer
+2026-05-05 23:35:52,fit_nb_full,naive bayes
+2026-05-05 23:35:53,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-05 23:35:53,tune_svm_full,seeded cost 16 ; re-tuning
+2026-05-05 23:35:58,fit_svm_full,selected cost 0.01
+2026-05-05 23:53:56,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-05 23:53:57,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-05 23:54:05,vectorizer,fitting full-corpus vectorizer
+2026-05-05 23:56:40,fit_nb_full,naive bayes
+2026-05-05 23:56:41,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-05 23:56:41,tune_svm_full,seeded cost 16 ; re-tuning
+2026-05-06 00:17:09,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-06 00:17:09,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-06 00:17:14,vectorizer,fitting full-corpus vectorizer
+2026-05-06 00:19:13,fit_nb_full,naive bayes
+2026-05-06 00:19:14,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-06 00:19:14,fit_svm_full,using saved cost 16
+2026-05-06 00:19:15,fit_svm_full,cv failed; falling back to in-sample margins: SVM fit failed: route dense produced constant or invalid training margins
+2026-05-06 00:35:57,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-06 00:35:57,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-06 00:36:06,vectorizer,fitting full-corpus vectorizer
+2026-05-06 00:39:19,fit_nb_full,naive bayes
+2026-05-06 00:39:20,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-06 00:39:21,fit_svm_full,using saved cost 16
+2026-05-06 00:39:23,fit_svm_full,cv failed; falling back to in-sample margins: SVM fit failed: route dense produced constant or invalid training margins
+2026-05-06 00:39:24,fit_svm_full,SVM failed; writing NA SVM outputs: SVM fit failed: route dense produced constant or invalid training margins
+2026-05-06 00:39:24,fit_xgb_full,nrounds 4000
+2026-05-06 00:42:06,fit_lgb_full,nrounds 168
+2026-05-06 00:42:14,saved_scores,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_model_scores.csv
+2026-05-06 00:42:14,saved_skipped_rows,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_rows_skipped_missing_text_lemma.csv
+2026-05-06 00:42:14,saved_params,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/prediction_only_hyperparameters_used.csv
+2026-05-06 00:42:14,done,rows total: 1906 | rows scored: 1899 | rows skipped: 7
+2026-05-06 00:58:51,prediction_only,refitting once on labeled corpus with saved hyperparameters; no nested tuning
+2026-05-06 00:58:51,new_corpus,../../data/processed_texts/600ad/cltk_latin_onefile_merged_with_text_and_lemmas-2.csv
+2026-05-06 00:58:58,vectorizer,fitting full-corpus vectorizer
+2026-05-06 01:01:51,fit_nb_full,naive bayes
+2026-05-06 01:01:52,fit_enet_full,alpha 0.2 lambda 0.1011
+2026-05-06 01:01:52,fit_svm_full,using saved cost 16
+2026-05-06 01:02:10,fit_xgb_full,nrounds 4000
+2026-05-06 01:04:46,fit_lgb_full,nrounds 168
+2026-05-06 01:04:55,saved_scores,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_model_scores.csv
+2026-05-06 01:04:55,saved_skipped_rows,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/new_corpus_rows_skipped_missing_text_lemma.csv
+2026-05-06 01:04:56,saved_params,../../results/predictions/non_transformer_lemmatized/600ad/model_outputs_checkpointed/prediction_only_hyperparameters_used.csv
+2026-05-06 01:04:56,done,rows total: 1906 | rows scored: 1899 | rows skipped: 7

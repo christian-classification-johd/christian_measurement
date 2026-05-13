@@ -1,0 +1,1603 @@
+---
+title: "Latin text classification"
+author: "Muhammad Rehan"
+date: 2026-01-10
+format:
+  html:
+    theme:
+      light: [lux, assets/theme.scss]
+      dark: [darkly, assets/theme-dark.scss]
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    smooth-scroll: true
+    anchor-sections: true
+    code-copy: true
+    code-overflow: wrap
+    code-fold: show
+    code-tools: true
+    code-link: true
+    highlight-style: nord
+    lightbox: auto
+    citations-hover: true
+    crossrefs-hover: true
+    fig-align: center
+    fig-width: 8
+    fig-asp: 0.62
+    fig-dpi: 300
+    fig-format: svg
+    grid:
+      body-width: 980px
+      margin-width: 280px
+      gutter-width: 1.2rem
+    css: [assets/custom.css]
+
+include-in-header:
+  text: |
+    <!-- Standard meta -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b5ed7" />
+
+    <!-- KaTeX for LaTeX math -->
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"
+          integrity="sha384-/7mQh8gJtX+NEwGDbVS9/6IKxhpcJn/qdNqxabWWMwBLT/gR59OA8sLu7saEh1N5"
+          crossorigin="anonymous">
+
+    <script defer
+            src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"
+            integrity="sha384-G/jPD7WvyaManIeZDV4SSQdlqzTeWY5Avzkdxl3pNGdisz8Iky3Uczdlz7YTpcvA"
+            crossorigin="anonymous"></script>
+
+    <script defer
+            src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
+            integrity="sha384-mll67QQj1YOD9OFwP8CMLJrjCwXTlzAIXazhbugzuDUFcPRl1BDpRP70dNFu7Bbf"
+            crossorigin="anonymous"
+            onload="renderMathInElement(document.body);"></script>
+
+execute:
+  echo: true
+  warning: false
+  message: false
+  freeze: auto
+  cache: true
+  dpi: 600
+
+math: katex
+---
+
+# Classification of christian vs. non-christian documents
+
+
+## Data loading and cleaning
+
+### Loading in and filtering the data (this code chunk can be skipped if corpus.csv already exists in the script directory)
+
+```{r}
+library(tidyverse)
+library(stringi)
+
+data_path <- "../../data/processed_texts/600ad"
+results_path <- "../../results/predictions/non_transformer_lemmatized/600ad"
+```
+
+
+```{r}
+library(tidyverse)
+library(quanteda)
+library(quanteda.textmodels)
+
+df <- readr::read_csv(file.path(data_path, "corpus_600ad.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(!is.na(text) & text != "") %>%
+  mutate(row_id = row_number())
+
+labels <- readr::read_csv(file.path(data_path,"corpus_600ad_labeled.csv"), show_col_types = FALSE) %>%
+  mutate(id = as.character(id)) %>%
+  filter(label %in% c("christian", "non_christian")) %>%
+  transmute(id, manual_label = label) %>%
+  distinct(id, .keep_all = TRUE)
+
+df_labeled <- df %>%
+  inner_join(labels, by = "id") 
+
+```
+
+
+### Loading in the stopwowrds
+
+```{r}
+
+custom_additions <- c(
+  "m", "c", "l", "d", "gt", "lt", "br", "href", 
+  "fridericus", "heinricus", "conradus", "meus", "tuus" 
+)
+
+stops_v1 <- scan("../../data/stopwords/stopwords_latin1.txt", what = "character", quiet = TRUE, encoding = "UTF-8")
+
+stops_v2 <- scan("../../data/stopwords/stopwords_latin2.txt", what = "character", comment.char = "#", quiet = TRUE, encoding = "UTF-8")
+
+latin_stops <- c(stops_v1, stops_v2, custom_additions)
+
+latin_stops <- latin_stops[latin_stops != "*"]
+
+latin_stops <- unique(latin_stops)
+
+latin_stops <- sort(latin_stops)
+
+head(latin_stops, 200)
+
+```
+
+
+
+### Defining a tokenization function to count relative frequencies per token for the NB classifier
+
+
+```{r}
+library(quanteda)
+library(quanteda.textmodels)
+library(tidyverse)
+library(knitr)
+
+
+get_standard_dfm <- function(text_data, stop_list) {
+
+  toks <- tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
+    tokens_remove(pattern = stop_list)
+  
+
+  dfm(toks)
+}
+
+
+dfm_train <- get_standard_dfm(df_labeled$text, latin_stops)
+
+dim(dfm_train)
+
+```
+
+
+## Training classification models
+
+### Setting up model parameters
+
+
+```{r}
+
+library(tidyverse)
+library(quanteda)
+library(quanteda.textmodels)
+library(glmnet)
+library(LiblineaR)
+library(xgboost)
+library(lightgbm)
+library(Matrix)
+library(pROC)
+if (!requireNamespace("kernlab", quietly = TRUE)) {
+  install.packages("kernlab", repos = "https://cloud.r-project.org")
+}
+library(kernlab)
+
+set.seed(123)
+
+checkpoint_path <- "../../results/predictions/non_transformer_lemmatized/600ad"
+
+k_folds_outer <- 5L
+k_folds_inner <- 5L
+xgb_max_rounds <- 4000L
+lgb_max_rounds <- 4000L
+early_stop_rounds <- 100L
+min_docfreq <- 3L
+
+checkpoint_root <- file.path(checkpoint_path, "checkpoints_nested_text_models")
+output_dir <- file.path(checkpoint_path, "model_outputs_checkpointed")
+progress_path <- file.path(checkpoint_path, "model_progress_log.csv")
+
+dir.create(checkpoint_root, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+ensure_dir <- function(path) {
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  invisible(path)
+}
+
+save_rds_atomic <- function(object, path) {
+  ensure_dir(dirname(path))
+  tmp <- paste0(path, ".tmp_", Sys.getpid(), "_", format(Sys.time(), "%Y%m%d%H%M%S"))
+  saveRDS(object, tmp)
+  ok <- file.rename(tmp, path)
+  if (!ok) {
+    file.copy(tmp, path, overwrite = TRUE)
+    unlink(tmp)
+  }
+  invisible(path)
+}
+
+write_csv_atomic <- function(x, path) {
+  ensure_dir(dirname(path))
+  tmp <- paste0(path, ".tmp_", Sys.getpid(), "_", format(Sys.time(), "%Y%m%d%H%M%S"), ".csv")
+  readr::write_csv(x, tmp)
+  ok <- file.rename(tmp, path)
+  if (!ok) {
+    file.copy(tmp, path, overwrite = TRUE)
+    unlink(tmp)
+  }
+  invisible(path)
+}
+
+load_rds_or_null <- function(path) {
+  if (!file.exists(path)) return(NULL)
+  readRDS(path)
+}
+
+append_progress_row <- function(row, path) {
+  row <- row %>% mutate(across(everything(), as.character))
+  if (!file.exists(path)) {
+    write_csv_atomic(row, path)
+  } else {
+    old <- readr::read_csv(
+      path,
+      show_col_types = FALSE,
+      col_types = readr::cols(.default = readr::col_character())
+    ) %>%
+      mutate(across(everything(), as.character))
+    write_csv_atomic(bind_rows(old, row), path)
+  }
+}
+
+log_progress <- function(step, detail = "") {
+  row <- tibble(
+    time = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+    step = step,
+    detail = detail
+  )
+  message(paste0("[", row$time, "] ", step, if (nzchar(detail)) paste0(" | ", detail) else ""))
+  append_progress_row(row, progress_path)
+}
+
+safe_prob <- function(p, eps = 1e-15) pmin(pmax(as.numeric(p), eps), 1 - eps)
+safe_logit <- function(p, eps = 1e-15) qlogis(safe_prob(p, eps))
+
+check_binary_y <- function(y, where = "") {
+  tb <- table(y)
+  if (!all(c("christian", "non_christian") %in% names(tb))) {
+    stop(paste0("Both classes are required", if (nzchar(where)) paste0(" in ", where) else "", "."))
+  }
+  if (any(tb < 2)) {
+    stop(paste0("Each class needs at least 2 observations", if (nzchar(where)) paste0(" in ", where) else "", "."))
+  }
+}
+
+make_folds <- function(y, k, seed = 123) {
+  check_binary_y(y, "make_folds")
+  set.seed(seed)
+  k_use <- min(as.integer(k), min(table(y)))
+  if (k_use < 2) stop("Not enough observations per class for cross-validation.")
+  idx_pos <- sample(which(y == "christian"))
+  idx_neg <- sample(which(y == "non_christian"))
+  folds <- vector("list", k_use)
+  for (i in seq_len(k_use)) folds[[i]] <- integer(0)
+  for (i in seq_along(idx_pos)) folds[[((i - 1) %% k_use) + 1]] <- c(folds[[((i - 1) %% k_use) + 1]], idx_pos[i])
+  for (i in seq_along(idx_neg)) folds[[((i - 1) %% k_use) + 1]] <- c(folds[[((i - 1) %% k_use) + 1]], idx_neg[i])
+  folds
+}
+
+make_foldid <- function(y, k, seed = 123) {
+  folds <- make_folds(y, k, seed)
+  foldid <- integer(length(y))
+  for (i in seq_along(folds)) foldid[folds[[i]]] <- i
+  foldid
+}
+
+auc_safe <- function(y, p) {
+  p <- safe_prob(p)
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = p,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+auc_margin_safe <- function(y, s) {
+  s <- as.numeric(s)
+  tryCatch(
+    as.numeric(pROC::auc(pROC::roc(
+      response = y,
+      predictor = s,
+      levels = c("non_christian", "christian"),
+      direction = "<",
+      quiet = TRUE
+    ))),
+    error = function(e) NA_real_
+  )
+}
+
+log_loss_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  -mean(y01 * log(p) + (1 - y01) * log(1 - p))
+}
+
+brier_safe <- function(y, p) {
+  p <- safe_prob(p)
+  y01 <- as.integer(y == "christian")
+  mean((y01 - p)^2)
+}
+
+hard_metrics <- function(y, pred_label) {
+  y01 <- as.integer(y == "christian")
+  p01 <- as.integer(pred_label == "christian")
+  tp <- sum(y01 == 1 & p01 == 1)
+  tn <- sum(y01 == 0 & p01 == 0)
+  fp <- sum(y01 == 0 & p01 == 1)
+  fn <- sum(y01 == 1 & p01 == 0)
+  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
+  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
+  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else 2 * precision * recall / (precision + recall)
+  bal_acc <- mean(c(recall, specificity), na.rm = TRUE)
+  mcc_den <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  mcc <- if (mcc_den == 0) NA_real_ else ((tp * tn) - (fp * fn)) / mcc_den
+  tibble(
+    accuracy = (tp + tn) / length(y),
+    balanced_accuracy = bal_acc,
+    precision = precision,
+    recall = recall,
+    specificity = specificity,
+    f1 = f1,
+    mcc = mcc,
+    tp = tp,
+    tn = tn,
+    fp = fp,
+    fn = fn
+  )
+}
+
+choose_threshold <- function(y, p, metric = c("youden", "f1")) {
+  metric <- match.arg(metric)
+  p <- safe_prob(p)
+  if (metric == "youden") {
+    th <- tryCatch(
+      pROC::coords(
+        pROC::roc(
+          response = y,
+          predictor = p,
+          levels = c("non_christian", "christian"),
+          direction = "<",
+          quiet = TRUE
+        ),
+        x = "best",
+        input = "threshold",
+        best.method = "youden",
+        ret = "threshold",
+        transpose = FALSE
+      )[[1]],
+      error = function(e) NA_real_
+    )
+    if (!is.finite(th)) 0.5 else as.numeric(th)
+  } else {
+    y01 <- as.integer(y == "christian")
+    cand <- sort(unique(p))
+    cand <- unique(c(0, cand, 0.5, 1))
+    f1s <- vapply(cand, function(th) {
+      pred01 <- as.integer(p >= th)
+      tp <- sum(pred01 == 1 & y01 == 1)
+      fp <- sum(pred01 == 1 & y01 == 0)
+      fn <- sum(pred01 == 0 & y01 == 1)
+      den <- 2 * tp + fp + fn
+      if (den == 0) 0 else 2 * tp / den
+    }, numeric(1))
+    cand[which.max(f1s)]
+  }
+}
+
+summarize_model_oof <- function(y, p, pred_youden, pred_f1, model_name) {
+  hy <- hard_metrics(y, pred_youden)
+  hf <- hard_metrics(y, pred_f1)
+  tibble(
+    model = model_name,
+    auc = auc_safe(y, p),
+    log_loss = log_loss_safe(y, p),
+    brier = brier_safe(y, p),
+    threshold_policy_youden = "nested_outer_train_only",
+    accuracy_youden = hy$accuracy,
+    balanced_accuracy_youden = hy$balanced_accuracy,
+    precision_youden = hy$precision,
+    recall_youden = hy$recall,
+    specificity_youden = hy$specificity,
+    f1_youden = hy$f1,
+    mcc_youden = hy$mcc,
+    tp_youden = hy$tp,
+    tn_youden = hy$tn,
+    fp_youden = hy$fp,
+    fn_youden = hy$fn,
+    threshold_policy_f1 = "nested_outer_train_only",
+    accuracy_f1 = hf$accuracy,
+    balanced_accuracy_f1 = hf$balanced_accuracy,
+    precision_f1 = hf$precision,
+    recall_f1 = hf$recall,
+    specificity_f1 = hf$specificity,
+    f1_f1 = hf$f1,
+    mcc_f1 = hf$mcc,
+    tp_f1 = hf$tp,
+    tn_f1 = hf$tn,
+    fp_f1 = hf$fp,
+    fn_f1 = hf$fn
+  )
+}
+
+summarize_model_fold <- function(y, p, pred_youden, pred_f1, model_name, outer_fold) {
+  hy <- hard_metrics(y, pred_youden)
+  hf <- hard_metrics(y, pred_f1)
+  tibble(
+    outer_fold = outer_fold,
+    model = model_name,
+    auc = auc_safe(y, p),
+    log_loss = log_loss_safe(y, p),
+    brier = brier_safe(y, p),
+    accuracy_youden = hy$accuracy,
+    balanced_accuracy_youden = hy$balanced_accuracy,
+    precision_youden = hy$precision,
+    recall_youden = hy$recall,
+    specificity_youden = hy$specificity,
+    f1_youden = hy$f1,
+    mcc_youden = hy$mcc,
+    accuracy_f1 = hf$accuracy,
+    balanced_accuracy_f1 = hf$balanced_accuracy,
+    precision_f1 = hf$precision,
+    recall_f1 = hf$recall,
+    specificity_f1 = hf$specificity,
+    f1_f1 = hf$f1,
+    mcc_f1 = hf$mcc
+  )
+}
+
+upsert_rows <- function(df, new_rows, keys) {
+  if (is.null(df) || nrow(df) == 0) return(new_rows)
+  keep <- dplyr::anti_join(df, dplyr::distinct(new_rows[, keys, drop = FALSE]), by = keys)
+  bind_rows(keep, new_rows)
+}
+
+fit_platt <- function(scores, y) {
+  z <- tibble(score = as.numeric(scores), y = as.integer(y == "christian")) %>%
+    filter(is.finite(score))
+  if (nrow(z) < 10 || length(unique(z$score)) < 2 || length(unique(z$y)) < 2) return(NULL)
+  suppressWarnings(
+    tryCatch({
+      fit <- glm(y ~ score, data = z, family = binomial(), control = glm.control(maxit = 200))
+      coef_score <- coef(fit)[["score"]]
+      if (!is.finite(coef_score) || coef_score < 0) return(NULL)
+      if (abs(coef_score) > 50) return(NULL)
+      fit
+    }, error = function(e) NULL)
+  )
+}
+
+apply_platt <- function(platt, scores) {
+  scores <- as.numeric(scores)
+  if (is.null(platt)) {
+    z <- as.numeric(scale(scores))
+    z[!is.finite(z)] <- 0
+    safe_prob(plogis(z))
+  } else {
+    safe_prob(predict(platt, newdata = data.frame(score = scores), type = "response"))
+  }
+}
+
+make_counts_dfm <- function(text_data, stop_list) {
+  quanteda::tokens(text_data, remove_punct = TRUE, remove_numbers = TRUE) %>%
+    quanteda::tokens_remove(pattern = stop_list) %>%
+    quanteda::dfm()
+}
+
+fit_vectorizer <- function(text_data, stop_list, min_df = min_docfreq) {
+  x <- make_counts_dfm(text_data, stop_list)
+  if (min_df > 1L) {
+    x <- quanteda::dfm_trim(x, min_docfreq = min_df, docfreq_type = "count")
+  }
+  if (quanteda::nfeat(x) == 0) stop("No features remain after filtering.")
+  N <- quanteda::ndoc(x)
+  n_k <- quanteda::docfreq(x, scheme = "count")
+  idf <- log((N + 1) / (n_k + 1)) + 1
+  list(features = quanteda::featnames(x), idf = idf, min_df = min_df)
+}
+
+transform_counts_dfm <- function(text_data, vec, stop_list) {
+  x <- make_counts_dfm(text_data, stop_list)
+  quanteda::dfm_match(x, features = vec$features)
+}
+
+transform_tfidf_sparse <- function(text_data, vec, stop_list) {
+  x_counts <- transform_counts_dfm(text_data, vec, stop_list)
+  x_mat <- as(x_counts, "dgCMatrix")
+  x_vals <- x_mat@x
+  x_mat@x <- 1 + log(x_vals)
+  idf_vec <- vec$idf[match(colnames(x_mat), names(vec$idf))]
+  idf_vec[is.na(idf_vec)] <- 0
+  x_tfidf <- x_mat %*% Matrix::Diagonal(x = idf_vec)
+  colnames(x_tfidf) <- colnames(x_mat)
+  row_norms <- sqrt(Matrix::rowSums(x_tfidf^2))
+  row_norms[row_norms == 0] <- 1
+  x_tfidf <- Matrix::Diagonal(x = 1 / row_norms) %*% x_tfidf
+  Matrix::drop0(x_tfidf)
+}
+
+nb_prob_christian <- function(pred_obj) {
+  if ("christian" %in% colnames(pred_obj)) safe_prob(pred_obj[, "christian"]) else safe_prob(pred_obj[, ncol(pred_obj)])
+}
+
+fit_nb_model <- function(x_dfm, y) {
+  quanteda.textmodels::textmodel_nb(x_dfm, y)
+}
+
+predict_nb_score <- function(fit, newx_dfm) {
+  safe_logit(nb_prob_christian(predict(fit, newdata = newx_dfm, type = "probability")))
+}
+
+enet_alpha_grid <- c(0.05, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+fit_enet_fixed <- function(x, y, alpha, lambda) {
+  glmnet::glmnet(
+    x = x,
+    y = as.integer(y == "christian"),
+    family = "binomial",
+    alpha = alpha,
+    lambda = lambda,
+    standardize = TRUE,
+    maxit = 1e6
+  )
+}
+
+enet_has_nonzero <- function(fit) {
+  cf <- tryCatch(as.matrix(coef(fit)), error = function(e) NULL)
+  if (is.null(cf) || nrow(cf) <= 1) return(FALSE)
+  any(abs(cf[-1, 1]) > 0)
+}
+
+predict_enet_score <- function(fit, newx) {
+  as.numeric(predict(fit, newx = newx, type = "link"))
+}
+
+predict_enet_prob <- function(fit, newx) {
+  safe_prob(as.numeric(predict(fit, newx = newx, type = "response")))
+}
+
+enet_lambda_grid <- function(x, y, alpha, nlambda = 60, lambda.min.ratio = 1e-3) {
+  base_fit <- glmnet::glmnet(
+    x = x,
+    y = as.integer(y == "christian"),
+    family = "binomial",
+    alpha = alpha,
+    standardize = TRUE,
+    nlambda = nlambda,
+    lambda.min.ratio = lambda.min.ratio,
+    maxit = 1e6
+  )
+  as.numeric(base_fit$lambda)
+}
+
+tune_enet_lambda_ckpt <- function(x, y, inner_k = 5, seed = 123, prefix = "", ckpt_dir, nlambda = 60, lambda.min.ratio = 1e-3) {
+  ensure_dir(ckpt_dir)
+  folds <- make_folds(y, inner_k, seed)
+  alpha_rows <- vector("list", length(enet_alpha_grid))
+  for (a_idx in seq_along(enet_alpha_grid)) {
+    alpha <- enet_alpha_grid[a_idx]
+    lambda_grid <- enet_lambda_grid(x, y, alpha = alpha, nlambda = nlambda, lambda.min.ratio = lambda.min.ratio)
+    tuning_rows <- vector("list", length(lambda_grid))
+    for (g in seq_along(lambda_grid)) {
+      lam <- lambda_grid[g]
+      fold_losses <- rep(NA_real_, length(folds))
+      for (j in seq_along(folds)) {
+        log_progress("enet_tuning_fold", paste(prefix, "alpha", alpha, "lambda", g, "of", length(lambda_grid), "fold", j, "of", length(folds)))
+        va <- folds[[j]]
+        tr <- setdiff(seq_along(y), va)
+        fit <- fit_enet_fixed(x[tr, , drop = FALSE], y[tr], alpha = alpha, lambda = lam)
+        if (!enet_has_nonzero(fit)) {
+          fold_losses[j] <- Inf
+        } else {
+          p_va <- predict_enet_prob(fit, x[va, , drop = FALSE])
+          fold_losses[j] <- log_loss_safe(y[va], p_va)
+        }
+      }
+      cvm <- mean(fold_losses, na.rm = TRUE)
+      cvsd <- stats::sd(fold_losses, na.rm = TRUE) / sqrt(sum(is.finite(fold_losses)))
+      tuning_rows[[g]] <- tibble(alpha = alpha, lambda = lam, cvm = cvm, cvsd = cvsd)
+    }
+    alpha_tuning <- bind_rows(tuning_rows) %>% arrange(desc(lambda))
+    idx_min <- which.min(alpha_tuning$cvm)
+    lambda_min <- alpha_tuning$lambda[idx_min]
+    cutoff <- alpha_tuning$cvm[idx_min] + alpha_tuning$cvsd[idx_min]
+    lambda_1se <- max(alpha_tuning$lambda[alpha_tuning$cvm <= cutoff], na.rm = TRUE)
+    alpha_rows[[a_idx]] <- tibble(alpha = alpha, lambda_1se = as.numeric(lambda_1se), lambda_min = as.numeric(lambda_min), cvm_min = alpha_tuning$cvm[idx_min])
+  }
+  alpha_summary <- bind_rows(alpha_rows) %>% arrange(cvm_min, alpha)
+  best <- alpha_summary[1, , drop = FALSE]
+  list(alpha = as.numeric(best$alpha), lambda = as.numeric(best$lambda_1se), lambda_min = as.numeric(best$lambda_min), tuning = alpha_summary)
+}
+
+cv_enet_scores_ckpt <- function(x, y, alpha, lambda, k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  state_path <- file.path(ckpt_dir, "state.rds")
+  folds <- make_folds(y, k, seed)
+  state <- load_rds_or_null(state_path)
+  if (is.null(state) || length(state$scores) != length(y) || length(state$done) != length(folds)) {
+    state <- list(scores = rep(NA_real_, length(y)), done = rep(FALSE, length(folds)))
+  }
+  for (j in seq_along(folds)) {
+    if (isTRUE(state$done[j])) next
+    log_progress("enet_calibration_fold", paste(prefix, "fold", j, "of", length(folds)))
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_enet_fixed(x[tr, , drop = FALSE], y[tr], alpha = alpha, lambda = lambda)
+    state$scores[va] <- predict_enet_score(fit, x[va, , drop = FALSE])
+    state$done[j] <- TRUE
+    save_rds_atomic(state, state_path)
+  }
+  state$scores
+}
+
+cv_svm_scores_ckpt <- function(x, y, cost, k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  state_path <- file.path(ckpt_dir, "state.rds")
+  folds <- make_folds(y, k, seed)
+  state <- load_rds_or_null(state_path)
+  if (is.null(state) || length(state$scores) != length(y) || length(state$done) != length(folds)) {
+    state <- list(scores = rep(NA_real_, length(y)), done = rep(FALSE, length(folds)))
+  }
+  for (j in seq_along(folds)) {
+    if (isTRUE(state$done[j])) next
+    log_progress("svm_calibration_fold", paste(prefix, "cost", cost, "fold", j, "of", length(folds)))
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_svm_fixed(x[tr, , drop = FALSE], y[tr], cost = cost)
+    state$scores[va] <- predict_svm_score(fit, x[va, , drop = FALSE])
+    state$done[j] <- TRUE
+    save_rds_atomic(state, state_path)
+  }
+  state$scores
+}
+
+tune_svm_cost_ckpt <- function(x, y, cost_grid = c(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16), inner_k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  rows_path <- file.path(ckpt_dir, "summary.rds")
+  state <- load_rds_or_null(rows_path)
+  if (is.null(state) || length(state$done) != length(cost_grid)) {
+    state <- list(done = rep(FALSE, length(cost_grid)), rows = vector("list", length(cost_grid)))
+  }
+  for (i in seq_along(cost_grid)) {
+    if (isTRUE(state$done[i])) next
+    scores_i <- cv_svm_scores_ckpt(
+      x = x,
+      y = y,
+      cost = cost_grid[i],
+      k = inner_k,
+      seed = seed + i,
+      prefix = prefix,
+      ckpt_dir = file.path(ckpt_dir, sprintf("cost_%03d", i))
+    )
+    state$rows[[i]] <- tibble(cost = cost_grid[i], auc_margin = auc_margin_safe(y, scores_i))
+    state$done[i] <- TRUE
+    save_rds_atomic(state, rows_path)
+  }
+  tuning <- bind_rows(state$rows) %>% arrange(desc(auc_margin), cost)
+  list(cost = tuning$cost[1], tuning = tuning)
+}
+
+tune_xgb_model_ckpt <- function(x, y, inner_k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  grid <- xgb_grid()
+  folds <- make_folds(y, inner_k, seed)
+  summary_path <- file.path(ckpt_dir, "summary.rds")
+  summary_state <- load_rds_or_null(summary_path)
+  if (is.null(summary_state) || length(summary_state$done) != nrow(grid)) {
+    summary_state <- list(done = rep(FALSE, nrow(grid)))
+  }
+
+  n_pos <- sum(y == "christian")
+  n_neg <- sum(y == "non_christian")
+  spw <- n_neg / max(n_pos, 1)
+
+  for (g in seq_len(nrow(grid))) {
+    if (isTRUE(summary_state$done[g])) next
+    pars_row <- grid[g, , drop = FALSE]
+    cand_path <- file.path(ckpt_dir, sprintf("candidate_%03d.rds", g))
+    cand_state <- load_rds_or_null(cand_path)
+    if (is.null(cand_state) || length(cand_state$oof_prob) != length(y) || length(cand_state$done) != length(folds)) {
+      cand_state <- list(
+        oof_prob = rep(NA_real_, length(y)),
+        best_iters = rep(NA_integer_, length(folds)),
+        done = rep(FALSE, length(folds))
+      )
+    }
+    for (j in seq_along(folds)) {
+      if (isTRUE(cand_state$done[j])) next
+      log_progress("xgb_tuning_fold", paste(prefix, "candidate", g, "of", nrow(grid), "fold", j, "of", length(folds)))
+      va <- folds[[j]]
+      tr <- setdiff(seq_along(y), va)
+      n_pos_tr <- sum(y[tr] == "christian")
+      n_neg_tr <- sum(y[tr] == "non_christian")
+      spw_tr <- n_neg_tr / max(n_pos_tr, 1)
+      dtr <- xgboost::xgb.DMatrix(x[tr, , drop = FALSE], label = as.integer(y[tr] == "christian"))
+      dva <- xgboost::xgb.DMatrix(x[va, , drop = FALSE], label = as.integer(y[va] == "christian"))
+      fit <- xgboost::xgb.train(
+        params = make_xgb_params(pars_row, scale_pos_weight = spw_tr),
+        data = dtr,
+        nrounds = xgb_max_rounds,
+        evals = list(valid = dva),
+        early_stopping_rounds = early_stop_rounds,
+        verbose = 0
+      )
+      cand_state$oof_prob[va] <- safe_prob(as.numeric(predict(fit, dva)))
+      cand_state$best_iters[j] <- best_iter_xgb(fit, xgb_max_rounds)
+      cand_state$done[j] <- TRUE
+      save_rds_atomic(cand_state, cand_path)
+    }
+    summary_state$done[g] <- TRUE
+    save_rds_atomic(summary_state, summary_path)
+  }
+
+  tuning_rows <- vector("list", nrow(grid))
+  for (g in seq_len(nrow(grid))) {
+    pars_row <- grid[g, , drop = FALSE]
+    cand_state <- readRDS(file.path(ckpt_dir, sprintf("candidate_%03d.rds", g)))
+    tuning_rows[[g]] <- pars_row %>%
+      mutate(
+        log_loss = log_loss_safe(y, cand_state$oof_prob),
+        auc = auc_safe(y, cand_state$oof_prob),
+        best_nrounds = max(1L, as.integer(round(median(cand_state$best_iters, na.rm = TRUE))))
+      )
+  }
+  tuning <- bind_rows(tuning_rows) %>% arrange(log_loss, desc(auc), best_nrounds)
+  best <- tuning[1, , drop = FALSE]
+  list(best = best, params = make_xgb_params(best, scale_pos_weight = spw), tuning = tuning)
+}
+
+cv_xgb_scores_ckpt <- function(x, y, params, nrounds, k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  state_path <- file.path(ckpt_dir, "state.rds")
+  folds <- make_folds(y, k, seed)
+  state <- load_rds_or_null(state_path)
+  if (is.null(state) || length(state$scores) != length(y) || length(state$done) != length(folds)) {
+    state <- list(scores = rep(NA_real_, length(y)), done = rep(FALSE, length(folds)))
+  }
+  for (j in seq_along(folds)) {
+    if (isTRUE(state$done[j])) next
+    log_progress("xgb_calibration_fold", paste(prefix, "fold", j, "of", length(folds)))
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    n_pos_tr <- sum(y[tr] == "christian")
+    n_neg_tr <- sum(y[tr] == "non_christian")
+    fold_params <- modifyList(params, list(scale_pos_weight = n_neg_tr / max(n_pos_tr, 1)))
+    fit <- fit_xgb_fixed(x[tr, , drop = FALSE], y[tr], params = fold_params, nrounds = nrounds, seed = seed + j)
+    state$scores[va] <- predict_xgb_score(fit, x[va, , drop = FALSE])
+    state$done[j] <- TRUE
+    save_rds_atomic(state, state_path)
+  }
+  state$scores
+}
+
+tune_lgb_model_ckpt <- function(x, y, inner_k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  grid <- lgb_grid()
+  folds <- make_folds(y, inner_k, seed)
+  summary_path <- file.path(ckpt_dir, "summary.rds")
+  summary_state <- load_rds_or_null(summary_path)
+  if (is.null(summary_state) || length(summary_state$done) != nrow(grid)) {
+    summary_state <- list(done = rep(FALSE, nrow(grid)))
+  }
+
+  for (g in seq_len(nrow(grid))) {
+    if (isTRUE(summary_state$done[g])) next
+    pars_row <- grid[g, , drop = FALSE]
+    cand_path <- file.path(ckpt_dir, sprintf("candidate_%03d.rds", g))
+    cand_state <- load_rds_or_null(cand_path)
+    if (is.null(cand_state) || length(cand_state$oof_prob) != length(y) || length(cand_state$done) != length(folds)) {
+      cand_state <- list(
+        oof_prob = rep(NA_real_, length(y)),
+        best_iters = rep(NA_integer_, length(folds)),
+        done = rep(FALSE, length(folds))
+      )
+    }
+    for (j in seq_along(folds)) {
+      if (isTRUE(cand_state$done[j])) next
+      log_progress("lgb_tuning_fold", paste(prefix, "candidate", g, "of", nrow(grid), "fold", j, "of", length(folds)))
+      va <- folds[[j]]
+      tr <- setdiff(seq_along(y), va)
+      lgb_params_fold <- make_lgb_params(pars_row, seed = seed + 1000L * g + j)
+      result <- fit_lgb_early_stop(
+        x_tr = x[tr, , drop = FALSE],
+        y_tr = y[tr],
+        x_va = x[va, , drop = FALSE],
+        y_va = y[va],
+        params = lgb_params_fold,
+        max_rounds = lgb_max_rounds,
+        early_rounds = early_stop_rounds
+      )
+      cand_state$oof_prob[va] <- predict_lgb_prob(result$model, x[va, , drop = FALSE], num_iteration = result$best_iter)
+      cand_state$best_iters[j] <- result$best_iter
+      cand_state$done[j] <- TRUE
+      save_rds_atomic(cand_state, cand_path)
+    }
+    summary_state$done[g] <- TRUE
+    save_rds_atomic(summary_state, summary_path)
+  }
+
+  tuning_rows <- vector("list", nrow(grid))
+  for (g in seq_len(nrow(grid))) {
+    pars_row <- grid[g, , drop = FALSE]
+    cand_state <- readRDS(file.path(ckpt_dir, sprintf("candidate_%03d.rds", g)))
+    tuning_rows[[g]] <- pars_row %>%
+      mutate(
+        log_loss = log_loss_safe(y, cand_state$oof_prob),
+        auc = auc_safe(y, cand_state$oof_prob),
+        best_nrounds = max(1L, as.integer(round(median(cand_state$best_iters, na.rm = TRUE))))
+      )
+  }
+  tuning <- bind_rows(tuning_rows) %>% arrange(log_loss, desc(auc), best_nrounds)
+  best <- tuning[1, , drop = FALSE]
+  list(best = best, params = make_lgb_params(best, seed = seed + 9999L), tuning = tuning)
+}
+
+cv_lgb_scores_ckpt <- function(x, y, params, nrounds, k = 5, seed = 123, prefix = "", ckpt_dir) {
+  ensure_dir(ckpt_dir)
+  state_path <- file.path(ckpt_dir, "state.rds")
+  folds <- make_folds(y, k, seed)
+  state <- load_rds_or_null(state_path)
+  if (is.null(state) || length(state$scores) != length(y) || length(state$done) != length(folds)) {
+    state <- list(scores = rep(NA_real_, length(y)), done = rep(FALSE, length(folds)))
+  }
+  for (j in seq_along(folds)) {
+    if (isTRUE(state$done[j])) next
+    log_progress("lgb_calibration_fold", paste(prefix, "fold", j, "of", length(folds)))
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_lgb_fixed(
+      x = x[tr, , drop = FALSE],
+      y = y[tr],
+      params = modifyList(
+        params,
+        list(
+          seed = seed + j,
+          feature_fraction_seed = seed + j,
+          bagging_seed = seed + j
+        )
+      ),
+      nrounds = nrounds
+    )
+    state$scores[va] <- predict_lgb_score(fit, x[va, , drop = FALSE], num_iteration = nrounds)
+    state$done[j] <- TRUE
+    save_rds_atomic(state, state_path)
+  }
+  state$scores
+}
+
+run_lgb_preflight <- function(text_vec, y, stop_list, seed = 999L) {
+  folds <- make_folds(y, 2L, seed)
+  va <- folds[[1]]
+  tr <- setdiff(seq_along(y), va)
+  vec <- fit_vectorizer(text_vec[tr], stop_list)
+  x_tr <- transform_tfidf_sparse(text_vec[tr], vec, stop_list)
+  x_va <- transform_tfidf_sparse(text_vec[va], vec, stop_list)
+  pars_row <- lgb_grid()[1, , drop = FALSE]
+  pars <- make_lgb_params(pars_row, seed = seed)
+  result <- fit_lgb_early_stop(
+    x_tr = x_tr,
+    y_tr = y[tr],
+    x_va = x_va,
+    y_va = y[va],
+    params = pars,
+    max_rounds = 100L,
+    early_rounds = 20L
+  )
+  if (!is.finite(result$best_iter)) stop("LightGBM preflight failed to select a valid num_iteration.")
+  invisible(result)
+}
+
+save_model_object <- function(model, path, engine) {
+  ensure_dir(dirname(path))
+  if (engine == "xgboost") {
+    xgboost::xgb.save(model, path)
+  } else if (engine == "lightgbm") {
+    lightgbm::lgb.save(model, path)
+  } else {
+    save_rds_atomic(model, path)
+  }
+  invisible(path)
+}
+
+init_run_state <- function(n_lab) {
+  list(
+    preflight_done = FALSE,
+    outer_fold_id = integer(n_lab),
+
+    nb_oof = rep(NA_real_, n_lab),
+    enet_oof = rep(NA_real_, n_lab),
+    svm_oof = rep(NA_real_, n_lab),
+    xgb_oof = rep(NA_real_, n_lab),
+    lgb_oof = rep(NA_real_, n_lab),
+
+    nb_score_oof = rep(NA_real_, n_lab),
+    enet_score_oof = rep(NA_real_, n_lab),
+    svm_score_oof = rep(NA_real_, n_lab),
+    xgb_score_oof = rep(NA_real_, n_lab),
+    lgb_score_oof = rep(NA_real_, n_lab),
+
+    nb_pred_youden_oof = rep(NA_character_, n_lab),
+    enet_pred_youden_oof = rep(NA_character_, n_lab),
+    svm_pred_youden_oof = rep(NA_character_, n_lab),
+    xgb_pred_youden_oof = rep(NA_character_, n_lab),
+    lgb_pred_youden_oof = rep(NA_character_, n_lab),
+
+    nb_pred_f1_oof = rep(NA_character_, n_lab),
+    enet_pred_f1_oof = rep(NA_character_, n_lab),
+    svm_pred_f1_oof = rep(NA_character_, n_lab),
+    xgb_pred_f1_oof = rep(NA_character_, n_lab),
+    lgb_pred_f1_oof = rep(NA_character_, n_lab),
+
+    outer_threshold_df = tibble(),
+    fold_metric_df = tibble(),
+    selected_outer_df = tibble(),
+    model_done = list(),
+    full_done = list()
+  )
+}
+
+mark_done <- function(state, key, bucket = c("model_done", "full_done")) {
+  bucket <- match.arg(bucket)
+  state[[bucket]][[key]] <- TRUE
+  state
+}
+
+is_done <- function(state, key, bucket = c("model_done", "full_done")) {
+  bucket <- match.arg(bucket)
+  isTRUE(state[[bucket]][[key]])
+}
+
+prediction_only <- TRUE
+
+pick_new_corpus_file <- function(path) {
+  candidates <- list.files(
+    path,
+    pattern = "cltk_latin_onefile_merged_with_text_and_lemmas.*\\.csv$",
+    full.names = TRUE
+  )
+  if (!length(candidates)) {
+    stop("Could not find a CSV named like cltk_latin_onefile_merged_with_text_and_lemmas*.csv in data_path.")
+  }
+  info <- file.info(candidates)
+  candidates[order(info$mtime, decreasing = TRUE)][1]
+}
+
+pick_existing_file <- function(paths, label = "file") {
+  paths <- unique(paths)
+  hit <- paths[file.exists(paths)]
+  if (!length(hit)) return(NULL)
+  message(label, ": using ", hit[1])
+  hit[1]
+}
+
+normalize_model_name <- function(x) {
+  x <- tolower(as.character(x))
+  dplyr::case_when(
+    x %in% c("naive_bayes", "nb") ~ "naive_bayes",
+    x %in% c("enet", "elastic_net", "elastic-net", "ridge") ~ "enet",
+    x %in% c("svm", "svm_platt", "linear_svm") ~ "svm_platt",
+    x %in% c("xgb", "xgboost") ~ "xgboost",
+    x %in% c("lgb", "lightgbm") ~ "lightgbm",
+    TRUE ~ x
+  )
+}
+
+first_present_col <- function(df, candidates) {
+  hit <- intersect(candidates, names(df))
+  if (length(hit)) hit[1] else NULL
+}
+
+as_numeric_maybe <- function(x) suppressWarnings(as.numeric(x))
+
+standardize_thresholds <- function(df) {
+  nm <- names(df)
+  model_col <- first_present_col(df, c("model", "model_name", "classifier"))
+  youden_col <- first_present_col(df, c("threshold_youden", "youden_threshold", "youden", "thresh_youden"))
+  f1_col <- first_present_col(df, c("threshold_f1", "f1_threshold", "f1", "thresh_f1"))
+  if (is.null(model_col) || is.null(youden_col) || is.null(f1_col)) return(NULL)
+  df %>%
+    transmute(
+      model = normalize_model_name(.data[[model_col]]),
+      threshold_youden = as_numeric_maybe(.data[[youden_col]]),
+      threshold_f1 = as_numeric_maybe(.data[[f1_col]])
+    ) %>%
+    group_by(model) %>%
+    summarise(
+      threshold_youden = median(threshold_youden, na.rm = TRUE),
+      threshold_f1 = median(threshold_f1, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+collapse_outer_hyperparameters <- function(df) {
+  model_col <- first_present_col(df, c("model", "model_name", "classifier"))
+  if (is.null(model_col)) return(NULL)
+  df <- df %>% mutate(model = normalize_model_name(.data[[model_col]]))
+  drop_cols <- c(
+    "outer_fold", "fold", "model", "model_name", "classifier",
+    "threshold_youden", "threshold_f1",
+    "auc", "log_loss", "brier", "cvm", "cvsd", "cvm_min"
+  )
+  keep_cols <- setdiff(names(df), drop_cols)
+  out <- vector("list", length(unique(df$model)))
+  mods <- sort(unique(df$model))
+  for (i in seq_along(mods)) {
+    m <- mods[i]
+    sub <- df %>% filter(model == m)
+    row <- list(model = m)
+    for (col in keep_cols) {
+      vals <- sub[[col]]
+      vals2 <- vals[!is.na(vals)]
+      if (!length(vals2)) next
+      num <- suppressWarnings(as.numeric(vals2))
+      if (all(!is.na(num))) {
+        value <- median(num)
+        if (col %in% c("best_nrounds", "max_depth", "num_leaves", "bagging_freq", "min_data_in_leaf")) {
+          value <- as.integer(round(value))
+        }
+        row[[col]] <- value
+      } else {
+        tab <- sort(table(as.character(vals2)), decreasing = TRUE)
+        row[[col]] <- names(tab)[1]
+      }
+    }
+    out[[i]] <- tibble::as_tibble(row)
+  }
+  bind_rows(out)
+}
+
+read_threshold_table <- function() {
+  candidates <- c(
+    file.path(output_dir, "outer_thresholds.csv"),
+    file.path(results_path, "model_thresholds_oof.csv"),
+    file.path(checkpoint_path, "model_thresholds_oof.csv")
+  )
+  path <- pick_existing_file(candidates, "threshold file")
+  if (is.null(path)) return(NULL)
+  standardize_thresholds(readr::read_csv(path, show_col_types = FALSE))
+}
+
+read_hyper_table <- function() {
+  full_candidates <- c(
+    file.path(output_dir, "selected_full_hyperparameters.csv"),
+    file.path(results_path, "model_hyperparameters_full.csv"),
+    file.path(checkpoint_path, "model_hyperparameters_full.csv")
+  )
+  outer_candidates <- c(
+    file.path(output_dir, "selected_outer_hyperparameters.csv"),
+    file.path(results_path, "model_hyperparameters_outer.csv"),
+    file.path(checkpoint_path, "model_hyperparameters_outer.csv")
+  )
+  full_path <- pick_existing_file(full_candidates, "full hyperparameter file")
+  if (!is.null(full_path)) {
+    df <- readr::read_csv(full_path, show_col_types = FALSE)
+    model_col <- first_present_col(df, c("model", "model_name", "classifier"))
+    if (!is.null(model_col)) {
+      df <- df %>% mutate(model = normalize_model_name(.data[[model_col]]))
+      return(df)
+    }
+  }
+  outer_path <- pick_existing_file(outer_candidates, "outer hyperparameter file")
+  if (is.null(outer_path)) return(NULL)
+  collapse_outer_hyperparameters(readr::read_csv(outer_path, show_col_types = FALSE))
+}
+
+pick_num_from_row <- function(row, candidates, default = NA_real_) {
+  for (nm in candidates) {
+    if (nm %in% names(row)) {
+      val <- suppressWarnings(as.numeric(row[[nm]][1]))
+      if (length(val) && is.finite(val)) return(val)
+    }
+  }
+  default
+}
+
+threshold_value_or <- function(threshold_df, model_name, which = c("youden", "f1"), default = 0.5) {
+  which <- match.arg(which)
+  if (is.null(threshold_df) || !nrow(threshold_df)) return(default)
+  x <- threshold_df %>% filter(model == model_name)
+  if (!nrow(x)) return(default)
+  val <- if (which == "youden") x$threshold_youden[[1]] else x$threshold_f1[[1]]
+  if (is.finite(val)) val else default
+}
+
+get_hyper_row <- function(hyper_df, model_name) {
+  if (is.null(hyper_df) || !nrow(hyper_df)) return(tibble(model = model_name))
+  x <- hyper_df %>% filter(model == model_name)
+  if (!nrow(x)) tibble(model = model_name) else x[1, , drop = FALSE]
+}
+
+
+extract_svm_decision_values <- function(pred, pred_lab = NULL) {
+  s <- if (is.matrix(pred) || is.data.frame(pred)) {
+    as.numeric(pred[, 1])
+  } else {
+    as.numeric(pred)
+  }
+  if (!is.null(pred_lab)) {
+    pred_lab <- as.character(pred_lab)
+    if (length(unique(pred_lab)) > 1) {
+      m_chr <- suppressWarnings(mean(s[pred_lab == "christian"], na.rm = TRUE))
+      m_non <- suppressWarnings(mean(s[pred_lab == "non_christian"], na.rm = TRUE))
+      if (is.finite(m_chr) && is.finite(m_non) && m_chr < m_non) s <- -s
+    }
+  }
+  s
+}
+
+svm_to_matrix <- function(x) {
+  if (inherits(x, "Matrix")) return(as.matrix(x))
+  if (is.matrix(x)) return(x)
+  as.matrix(x)
+}
+
+fit_svm_linear <- function(x, y, cost = 1) {
+  x_in <- svm_to_matrix(x)
+  y_fac <- factor(y, levels = c("christian", "non_christian"))
+  if (nrow(x_in) != length(y_fac)) {
+    stop("SVM fit failed: number of rows in x does not match length(y)")
+  }
+  fit <- kernlab::ksvm(
+    x = x_in,
+    y = y_fac,
+    type = "C-svc",
+    kernel = "vanilladot",
+    C = cost,
+    scaled = FALSE,
+    prob.model = FALSE
+  )
+  tr_pred_lab <- as.character(predict(fit, x_in, type = "response"))
+  tr_scores <- extract_svm_decision_values(
+    predict(fit, x_in, type = "decision"),
+    pred_lab = tr_pred_lab
+  )
+  if (!(length(tr_scores) == length(y_fac) && all(is.finite(tr_scores)) && length(unique(signif(tr_scores, 12))) > 1L)) {
+    stop("SVM fit failed: kernlab produced constant or invalid training margins")
+  }
+  structure(list(model = fit), class = "safe_svm_fit")
+}
+
+predict_svm_margin <- function(fit, newx) {
+  model <- if (inherits(fit, "safe_svm_fit")) fit$model else fit
+  newx_in <- svm_to_matrix(newx)
+  pred_lab <- as.character(predict(model, newx_in, type = "response"))
+  extract_svm_decision_values(
+    predict(model, newx_in, type = "decision"),
+    pred_lab = pred_lab
+  )
+}
+
+make_xgb_params_fixed <- function(row, scale_pos_weight = 1, seed = 123) {
+  list(
+    objective = "binary:logistic",
+    eval_metric = "logloss",
+    eta = pick_num_from_row(row, c("eta", "learning_rate"), 0.05),
+    max_depth = as.integer(round(pick_num_from_row(row, c("max_depth"), 6))),
+    min_child_weight = pick_num_from_row(row, c("min_child_weight"), 1),
+    subsample = pick_num_from_row(row, c("subsample"), 0.8),
+    colsample_bytree = pick_num_from_row(row, c("colsample_bytree", "feature_fraction"), 0.8),
+    gamma = pick_num_from_row(row, c("gamma", "min_split_loss"), 0),
+    lambda = pick_num_from_row(row, c("lambda", "reg_lambda"), 1),
+    alpha = pick_num_from_row(row, c("alpha", "reg_alpha"), 0),
+    scale_pos_weight = scale_pos_weight,
+    seed = seed,
+    nthread = 1
+  )
+}
+
+fit_xgb_fixed_fast <- function(x, y, row, nrounds, seed = 123) {
+  spw <- sum(y == "non_christian") / max(sum(y == "christian"), 1)
+  dtrain <- xgboost::xgb.DMatrix(x, label = as.integer(y == "christian"))
+  xgboost::xgb.train(
+    params = make_xgb_params_fixed(row, scale_pos_weight = spw, seed = seed),
+    data = dtrain,
+    nrounds = as.integer(nrounds),
+    verbose = 0
+  )
+}
+
+predict_xgb_score_fast <- function(fit, newx) {
+  safe_logit(as.numeric(predict(fit, xgboost::xgb.DMatrix(newx))))
+}
+
+make_lgb_params_fixed <- function(row, seed = 123) {
+  list(
+    objective = "binary",
+    metric = "binary_logloss",
+    learning_rate = pick_num_from_row(row, c("learning_rate", "eta"), 0.05),
+    num_leaves = as.integer(round(pick_num_from_row(row, c("num_leaves"), 31))),
+    min_data_in_leaf = as.integer(round(pick_num_from_row(row, c("min_data_in_leaf"), 20))),
+    feature_fraction = pick_num_from_row(row, c("feature_fraction", "colsample_bytree"), 0.8),
+    bagging_fraction = pick_num_from_row(row, c("bagging_fraction", "subsample"), 0.8),
+    bagging_freq = as.integer(round(pick_num_from_row(row, c("bagging_freq"), 1))),
+    min_gain_to_split = pick_num_from_row(row, c("min_gain_to_split", "gamma"), 0),
+    lambda_l1 = pick_num_from_row(row, c("lambda_l1", "alpha", "reg_alpha"), 0),
+    lambda_l2 = pick_num_from_row(row, c("lambda_l2", "lambda", "reg_lambda"), 0),
+    verbosity = -1,
+    num_threads = 1,
+    seed = seed,
+    feature_fraction_seed = seed,
+    bagging_seed = seed,
+    deterministic = TRUE,
+    force_col_wise = TRUE
+  )
+}
+
+fit_lgb_fixed_fast <- function(x, y, row, nrounds, seed = 123) {
+  dtrain <- lightgbm::lgb.Dataset(x, label = as.integer(y == "christian"))
+  lightgbm::lgb.train(
+    params = make_lgb_params_fixed(row, seed = seed),
+    data = dtrain,
+    nrounds = as.integer(nrounds),
+    verbose = -1
+  )
+}
+
+predict_lgb_prob_fast <- function(fit, newx, num_iteration = NULL) {
+  safe_prob(as.numeric(predict(fit, newx, num_iteration = num_iteration)))
+}
+
+predict_lgb_score_fast <- function(fit, newx, num_iteration = NULL) {
+  safe_logit(predict_lgb_prob_fast(fit, newx, num_iteration = num_iteration))
+}
+
+cv_nb_scores_fixed <- function(x_dfm, y, k = 5, seed = 123) {
+  folds <- make_folds(y, k, seed)
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_nb_model(x_dfm[tr, ], y[tr])
+    scores[va] <- predict_nb_score(fit, x_dfm[va, ])
+  }
+  scores
+}
+
+cv_enet_scores_fixed <- function(x, y, alpha, lambda, k = 5, seed = 123) {
+  folds <- make_folds(y, k, seed)
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_enet_fixed(x[tr, , drop = FALSE], y[tr], alpha = alpha, lambda = lambda)
+    scores[va] <- predict_enet_score(fit, x[va, , drop = FALSE])
+  }
+  scores
+}
+
+cv_svm_scores_fixed <- function(x, y, cost, k = 5, seed = 123) {
+  folds <- make_folds(y, k, seed)
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_svm_linear(x[tr, , drop = FALSE], y[tr], cost = cost)
+    scores[va] <- predict_svm_margin(fit, x[va, , drop = FALSE])
+  }
+  scores
+}
+
+tune_svm_cost_inline <- function(x, y,
+                                 cost_grid = c(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16),
+                                 inner_k = 5, seed = 8003) {
+  rows <- vector("list", length(cost_grid))
+  for (i in seq_along(cost_grid)) {
+    s <- cv_svm_scores_fixed(x, y, cost = cost_grid[i], k = inner_k, seed = seed + i)
+    rows[[i]] <- tibble(cost = cost_grid[i], auc_margin = auc_margin_safe(y, s))
+  }
+  tuning <- bind_rows(rows) %>% arrange(desc(auc_margin), cost)
+  list(cost = tuning$cost[1], tuning = tuning)
+}
+
+cv_xgb_scores_fixed <- function(x, y, row, nrounds, k = 5, seed = 123) {
+  folds <- make_folds(y, k, seed)
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_xgb_fixed_fast(x[tr, , drop = FALSE], y[tr], row = row, nrounds = nrounds, seed = seed + j)
+    scores[va] <- predict_xgb_score_fast(fit, x[va, , drop = FALSE])
+  }
+  scores
+}
+
+cv_lgb_scores_fixed <- function(x, y, row, nrounds, k = 5, seed = 123) {
+  folds <- make_folds(y, k, seed)
+  scores <- rep(NA_real_, length(y))
+  for (j in seq_along(folds)) {
+    va <- folds[[j]]
+    tr <- setdiff(seq_along(y), va)
+    fit <- fit_lgb_fixed_fast(x[tr, , drop = FALSE], y[tr], row = row, nrounds = nrounds, seed = seed + j)
+    scores[va] <- predict_lgb_score_fast(fit, x[va, , drop = FALSE], num_iteration = nrounds)
+  }
+  scores
+}
+
+log_progress("prediction_only", "refitting once on labeled corpus with saved hyperparameters; no nested tuning")
+
+new_csv_path <- pick_new_corpus_file(data_path)
+log_progress("new_corpus", new_csv_path)
+
+thresholds <- read_threshold_table()
+hyper_df <- read_hyper_table()
+
+new_raw <- readr::read_csv(new_csv_path, show_col_types = FALSE)
+
+if (!"text_lemma" %in% names(new_raw)) {
+  stop("The new CSV must contain a text_lemma column.")
+}
+
+if (!"id" %in% names(new_raw)) {
+  new_raw$id <- NA_character_
+}
+
+if (!"manual_label" %in% names(new_raw)) {
+  new_raw$manual_label <- NA_character_
+}
+
+new_raw <- new_raw %>%
+  mutate(
+    source_row_id = row_number(),
+    id = as.character(id),
+    manual_label = as.character(manual_label),
+    text_lemma = if_else(is.na(text_lemma), NA_character_, as.character(text_lemma)),
+    text_for_model = stringi::stri_trim_both(coalesce(text_lemma, "")),
+    classify_status = if_else(text_for_model == "", "skipped_missing_text_lemma", "scored")
+  )
+
+new_skip <- new_raw %>%
+  filter(classify_status != "scored") %>%
+  select(-text_for_model)
+
+new_ok <- new_raw %>%
+  filter(classify_status == "scored")
+
+score_output_path <- file.path(output_dir, "new_corpus_model_scores.csv")
+skip_output_path <- file.path(output_dir, "new_corpus_rows_skipped_missing_text_lemma.csv")
+params_output_path <- file.path(output_dir, "prediction_only_hyperparameters_used.csv")
+
+if (nrow(new_ok) == 0) {
+  results_no_text <- new_raw %>%
+    select(-any_of(c("text", "text_lemma", "text_for_model")))
+
+  new_skip_no_text <- new_skip %>%
+    select(-any_of(c("text", "text_lemma", "text_for_model")))
+
+  write_csv_atomic(results_no_text, score_output_path)
+  write_csv_atomic(new_skip_no_text, skip_output_path)
+  log_progress("done", "no scorable rows found in the new CSV")
+} else {
+  train_df <- df_labeled %>%
+    mutate(
+      text = as.character(text),
+      text = if_else(is.na(text), "", text),
+      text = stringi::stri_trim_both(text)
+    ) %>%
+    filter(text != "")
+
+  log_progress("vectorizer", "fitting full-corpus vectorizer")
+  vec_full <- fit_vectorizer(train_df$text, latin_stops)
+  x_lab_dfm_full <- transform_counts_dfm(train_df$text, vec_full, latin_stops)
+  x_lab_full <- transform_tfidf_sparse(train_df$text, vec_full, latin_stops)
+
+  keep_train <- Matrix::rowSums(abs(x_lab_full)) > 0
+  if (any(!keep_train)) {
+    log_progress("train_filter", paste("dropping", sum(!keep_train), "blank/zero-feature training rows"))
+    train_df <- train_df[keep_train, , drop = FALSE]
+    x_lab_dfm_full <- x_lab_dfm_full[keep_train, ]
+    x_lab_full <- x_lab_full[keep_train, , drop = FALSE]
+  }
+
+  y_train <- train_df$manual_label
+  calibration_k <- min(5L, min(table(y_train)))
+  if (calibration_k < 2L) stop("Not enough labeled data for calibration after filtering.")
+
+  x_new_dfm <- transform_counts_dfm(new_ok$text_for_model, vec_full, latin_stops)
+  x_new <- transform_tfidf_sparse(new_ok$text_for_model, vec_full, latin_stops)
+
+  keep_new <- Matrix::rowSums(abs(x_new)) > 0
+  if (any(!keep_new)) {
+    zero_skip <- new_ok[!keep_new, , drop = FALSE] %>%
+      mutate(classify_status = "skipped_zero_feature_text") %>%
+      select(-text_for_model)
+    new_skip <- bind_rows(new_skip, zero_skip)
+    new_ok <- new_ok[keep_new, , drop = FALSE]
+    x_new_dfm <- x_new_dfm[keep_new, ]
+    x_new <- x_new[keep_new, , drop = FALSE]
+    new_raw <- new_raw %>%
+      mutate(classify_status = if_else(source_row_id %in% zero_skip$source_row_id, "skipped_zero_feature_text", classify_status))
+    log_progress("new_filter", paste("dropping", nrow(zero_skip), "zero-feature new rows"))
+  }
+
+  params_used <- list()
+
+  if (nrow(new_ok) == 0) {
+    results_no_text <- new_raw %>%
+      select(-any_of(c("text", "text_lemma", "text_for_model")))
+
+    new_skip_no_text <- new_skip %>%
+      select(-any_of(c("text", "text_lemma", "text_for_model")))
+
+    write_csv_atomic(results_no_text, score_output_path)
+    write_csv_atomic(new_skip_no_text, skip_output_path)
+    log_progress("done", "all candidate rows became zero-feature after vectorization")
+  } else {
+    log_progress("fit_nb_full", "naive bayes")
+    nb_cv_scores <- cv_nb_scores_fixed(x_lab_dfm_full, y_train, k = calibration_k, seed = 8001)
+    nb_platt <- fit_platt(nb_cv_scores, y_train)
+    nb_train_prob <- apply_platt(nb_platt, nb_cv_scores)
+    nb_fit <- fit_nb_model(x_lab_dfm_full, y_train)
+    nb_scores <- predict_nb_score(nb_fit, x_new_dfm)
+    nb_probs <- apply_platt(nb_platt, nb_scores)
+    nb_th_y <- threshold_value_or(thresholds, "naive_bayes", "youden", choose_threshold(y_train, nb_train_prob, "youden"))
+    nb_th_f <- threshold_value_or(thresholds, "naive_bayes", "f1", choose_threshold(y_train, nb_train_prob, "f1"))
+    params_used[[length(params_used) + 1]] <- tibble(model = "naive_bayes")
+
+    enet_row <- get_hyper_row(hyper_df, "enet")
+    enet_alpha <- pick_num_from_row(enet_row, c("alpha"), 0.1)
+    enet_lambda <- pick_num_from_row(enet_row, c("lambda_1se", "lambda", "lambda_min"), 0.01)
+    log_progress("fit_enet_full", paste("alpha", signif(enet_alpha, 4), "lambda", signif(enet_lambda, 4)))
+    enet_cv_scores <- cv_enet_scores_fixed(x_lab_full, y_train, alpha = enet_alpha, lambda = enet_lambda, k = calibration_k, seed = 8002)
+    enet_platt <- fit_platt(enet_cv_scores, y_train)
+    enet_train_prob <- apply_platt(enet_platt, enet_cv_scores)
+    enet_fit <- fit_enet_fixed(x_lab_full, y_train, alpha = enet_alpha, lambda = enet_lambda)
+    enet_scores <- predict_enet_score(enet_fit, x_new)
+    enet_probs <- apply_platt(enet_platt, enet_scores)
+    enet_th_y <- threshold_value_or(thresholds, "enet", "youden", choose_threshold(y_train, enet_train_prob, "youden"))
+    enet_th_f <- threshold_value_or(thresholds, "enet", "f1", choose_threshold(y_train, enet_train_prob, "f1"))
+    params_used[[length(params_used) + 1]] <- tibble(model = "enet", alpha = enet_alpha, lambda = enet_lambda)
+
+    svm_row <- get_hyper_row(hyper_df, "svm_platt")
+    svm_cost <- pick_num_from_row(svm_row, c("cost"), 1)
+    log_progress("fit_svm_full", paste("using saved cost", signif(svm_cost, 4)))
+    svm_scores <- rep(NA_real_, nrow(new_ok))
+    svm_probs <- rep(NA_real_, nrow(new_ok))
+    svm_th_y <- NA_real_
+    svm_th_f <- NA_real_
+    svm_status <- "ok"
+    svm_detail <- ""
+    tryCatch({
+      svm_cv_scores <- tryCatch(
+        cv_svm_scores_fixed(x_lab_full, y_train, cost = svm_cost, k = calibration_k, seed = 8003),
+        error = function(e) {
+          log_progress("fit_svm_full", paste("cv failed; falling back to in-sample margins:", conditionMessage(e)))
+          rep(NA_real_, length(y_train))
+        }
+      )
+      if (!all(is.finite(svm_cv_scores)) || length(unique(signif(stats::na.omit(svm_cv_scores), 12))) < 2L) {
+        svm_fit_cal <- fit_svm_linear(x_lab_full, y_train, cost = svm_cost)
+        svm_cv_scores <- predict_svm_margin(svm_fit_cal, x_lab_full)
+      }
+      svm_platt <- fit_platt(svm_cv_scores, y_train)
+      svm_train_prob <- apply_platt(svm_platt, svm_cv_scores)
+      svm_fit <- fit_svm_linear(x_lab_full, y_train, cost = svm_cost)
+      svm_scores <- predict_svm_margin(svm_fit, x_new)
+      svm_probs <- apply_platt(svm_platt, svm_scores)
+      svm_th_y <- threshold_value_or(thresholds, "svm_platt", "youden", choose_threshold(y_train, svm_train_prob, "youden"))
+      svm_th_f <- threshold_value_or(thresholds, "svm_platt", "f1", choose_threshold(y_train, svm_train_prob, "f1"))
+    }, error = function(e) {
+      svm_status <<- "failed"
+      svm_detail <<- conditionMessage(e)
+      log_progress("fit_svm_full", paste("SVM failed; writing NA SVM outputs:", svm_detail))
+    })
+    params_used[[length(params_used) + 1]] <- tibble(model = "svm_platt", cost = svm_cost, status = svm_status, detail = svm_detail)
+
+    xgb_row <- get_hyper_row(hyper_df, "xgboost")
+    xgb_nrounds <- as.integer(round(pick_num_from_row(xgb_row, c("best_nrounds", "nrounds"), 200)))
+    log_progress("fit_xgb_full", paste("nrounds", xgb_nrounds))
+    xgb_cv_scores <- cv_xgb_scores_fixed(x_lab_full, y_train, row = xgb_row, nrounds = xgb_nrounds, k = calibration_k, seed = 8004)
+    xgb_platt <- fit_platt(xgb_cv_scores, y_train)
+    xgb_train_prob <- apply_platt(xgb_platt, xgb_cv_scores)
+    xgb_fit <- fit_xgb_fixed_fast(x_lab_full, y_train, row = xgb_row, nrounds = xgb_nrounds, seed = 8104)
+    xgb_scores <- predict_xgb_score_fast(xgb_fit, x_new)
+    xgb_probs <- apply_platt(xgb_platt, xgb_scores)
+    xgb_th_y <- threshold_value_or(thresholds, "xgboost", "youden", choose_threshold(y_train, xgb_train_prob, "youden"))
+    xgb_th_f <- threshold_value_or(thresholds, "xgboost", "f1", choose_threshold(y_train, xgb_train_prob, "f1"))
+    params_used[[length(params_used) + 1]] <- tibble(
+      model = "xgboost",
+      eta = pick_num_from_row(xgb_row, c("eta", "learning_rate"), 0.05),
+      max_depth = as.integer(round(pick_num_from_row(xgb_row, c("max_depth"), 6))),
+      min_child_weight = pick_num_from_row(xgb_row, c("min_child_weight"), 1),
+      subsample = pick_num_from_row(xgb_row, c("subsample"), 0.8),
+      colsample_bytree = pick_num_from_row(xgb_row, c("colsample_bytree", "feature_fraction"), 0.8),
+      gamma = pick_num_from_row(xgb_row, c("gamma", "min_split_loss"), 0),
+      lambda = pick_num_from_row(xgb_row, c("lambda", "reg_lambda"), 1),
+      alpha = pick_num_from_row(xgb_row, c("alpha", "reg_alpha"), 0),
+      best_nrounds = xgb_nrounds
+    )
+
+    lgb_row <- get_hyper_row(hyper_df, "lightgbm")
+    lgb_nrounds <- as.integer(round(pick_num_from_row(lgb_row, c("best_nrounds", "nrounds"), 200)))
+    log_progress("fit_lgb_full", paste("nrounds", lgb_nrounds))
+    lgb_cv_scores <- cv_lgb_scores_fixed(x_lab_full, y_train, row = lgb_row, nrounds = lgb_nrounds, k = calibration_k, seed = 8005)
+    lgb_platt <- fit_platt(lgb_cv_scores, y_train)
+    lgb_train_prob <- apply_platt(lgb_platt, lgb_cv_scores)
+    lgb_fit <- fit_lgb_fixed_fast(x_lab_full, y_train, row = lgb_row, nrounds = lgb_nrounds, seed = 8105)
+    lgb_scores <- predict_lgb_score_fast(lgb_fit, x_new, num_iteration = lgb_nrounds)
+    lgb_probs <- apply_platt(lgb_platt, lgb_scores)
+    lgb_th_y <- threshold_value_or(thresholds, "lightgbm", "youden", choose_threshold(y_train, lgb_train_prob, "youden"))
+    lgb_th_f <- threshold_value_or(thresholds, "lightgbm", "f1", choose_threshold(y_train, lgb_train_prob, "f1"))
+    params_used[[length(params_used) + 1]] <- tibble(
+      model = "lightgbm",
+      learning_rate = pick_num_from_row(lgb_row, c("learning_rate", "eta"), 0.05),
+      num_leaves = as.integer(round(pick_num_from_row(lgb_row, c("num_leaves"), 31))),
+      min_data_in_leaf = as.integer(round(pick_num_from_row(lgb_row, c("min_data_in_leaf"), 20))),
+      feature_fraction = pick_num_from_row(lgb_row, c("feature_fraction", "colsample_bytree"), 0.8),
+      bagging_fraction = pick_num_from_row(lgb_row, c("bagging_fraction", "subsample"), 0.8),
+      bagging_freq = as.integer(round(pick_num_from_row(lgb_row, c("bagging_freq"), 1))),
+      min_gain_to_split = pick_num_from_row(lgb_row, c("min_gain_to_split", "gamma"), 0),
+      lambda_l1 = pick_num_from_row(lgb_row, c("lambda_l1", "alpha", "reg_alpha"), 0),
+      lambda_l2 = pick_num_from_row(lgb_row, c("lambda_l2", "lambda", "reg_lambda"), 0),
+      best_nrounds = lgb_nrounds
+    )
+
+    params_used_df <- bind_rows(params_used)
+
+scored_preds <- tibble(
+    source_row_id = new_ok$source_row_id,
+    nb_score = nb_scores,
+    nb_prob = nb_probs,
+    label_nb_youden = if_else(nb_probs >= nb_th_y, "christian", "non_christian"),
+    label_nb_f1 = if_else(nb_probs >= nb_th_f, "christian", "non_christian"),
+    score_enet_logit = enet_scores,
+    prob_enet = enet_probs,
+    label_enet_youden = if_else(enet_probs >= enet_th_y, "christian", "non_christian"),
+    label_enet_f1 = if_else(enet_probs >= enet_th_f, "christian", "non_christian"),
+    svm_score = svm_scores,
+    svm_prob = svm_probs,
+    label_svm_youden = if_else(svm_probs >= svm_th_y, "christian", "non_christian"),
+    label_svm_f1 = if_else(svm_probs >= svm_th_f, "christian", "non_christian"),
+    xgb_score = xgb_scores,
+    xgb_prob = xgb_probs,
+    label_xgb_youden = if_else(xgb_probs >= xgb_th_y, "christian", "non_christian"),
+    label_xgb_f1 = if_else(xgb_probs >= xgb_th_f, "christian", "non_christian"),
+    lgb_score = lgb_scores,
+    lgb_prob = lgb_probs,
+    label_lgb_youden = if_else(lgb_probs >= lgb_th_y, "christian", "non_christian"),
+    label_lgb_f1 = if_else(lgb_probs >= lgb_th_f, "christian", "non_christian")
+  )
+
+  results <- new_raw %>%
+    select(-text_for_model) %>%
+    left_join(scored_preds, by = "source_row_id")
+
+  results_no_text <- results %>%
+    select(-any_of(c("text", "text_lemma", "text_for_model")))
+
+  new_skip_no_text <- new_skip %>%
+    select(-any_of(c("text", "text_lemma", "text_for_model")))
+
+  write_csv_atomic(results_no_text, score_output_path)
+  write_csv_atomic(new_skip_no_text, skip_output_path)
+  write_csv_atomic(params_used_df, params_output_path)
+
+  log_progress("saved_scores", score_output_path)
+  log_progress("saved_skipped_rows", skip_output_path)
+  log_progress("saved_params", params_output_path)
+  log_progress(
+    "done",
+    paste(
+      "rows total:", nrow(results),
+      "| rows scored:", sum(results$classify_status == "scored"),
+      "| rows skipped:", sum(results$classify_status != "scored")
+    )
+  )
+  }
+}
+
+
+```

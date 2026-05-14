@@ -78,7 +78,7 @@ library(tidyverse)
 library(stringi)
 
 data_path <- "../../data/processed_texts/600ad"
-results_path <- "../../results/predictions/non_transformer_lemmatized/600ad_nochrist"
+results_path <- "../../results/predictions/non_transformer_lemmatized/600ad"
 ```
 
 
@@ -110,7 +110,7 @@ df_labeled <- df %>%
 
 custom_additions <- c(
   "m", "c", "l", "d", "gt", "lt", "br", "href", 
-  "fridericus", "heinricus", "conradus", "meus", "tuus", "christus", "christianus" 
+  "fridericus", "heinricus", "conradus", "meus", "tuus"
 )
 
 stops_v1 <- scan("../../data/stopwords/stopwords_latin1.txt", what = "character", quiet = TRUE, encoding = "UTF-8")
@@ -177,7 +177,7 @@ library(pROC)
 
 set.seed(123)
 
-checkpoint_path <- "../../results/predictions/non_transformer_lemmatized/600ad_nochrist"
+checkpoint_path <- "../../results/predictions/non_transformer_lemmatized/600ad"
 
 k_folds_outer <- 5L
 k_folds_inner <- 5L
@@ -721,9 +721,9 @@ predict_lgb_prob <- function(fit, newx, num_iteration = NULL) {
 
 predict_lgb_score <- function(fit, newx, num_iteration = NULL) {
   if (is.null(num_iteration)) {
-    as.numeric(predict(fit, newx, rawscore = TRUE))
+    as.numeric(predict(fit, newx, type = 'raw'))
   } else {
-    as.numeric(predict(fit, newx, rawscore = TRUE, num_iteration = as.integer(num_iteration)))
+    as.numeric(predict(fit, newx, type = 'raw', num_iteration = as.integer(num_iteration)))
   }
 }
 
